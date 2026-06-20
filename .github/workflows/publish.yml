@@ -19,7 +19,19 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
+      - name: Skip if this version is already on npm
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@curvet/sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "@curvet/sdk@$VERSION is already published — skipping."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       # prepublishOnly runs typecheck + tests + build before the package is packed
-      - run: npm publish --provenance --access public
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
