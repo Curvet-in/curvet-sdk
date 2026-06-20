@@ -1,0 +1,61 @@
+{
+  "name": "@curvet/sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for the Curvet Unified Playground API (chat, image, and video generation across providers, one API key).",
+  "license": "MIT",
+  "author": "Curvet <hello@curvet.in>",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "keywords": [
+    "curvet",
+    "ai",
+    "sdk",
+    "llm",
+    "chat",
+    "image-generation",
+    "video-generation",
+    "openai",
+    "anthropic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Curvet-in/curvet-sdk.git"
+  },
+  "homepage": "https://github.com/Curvet-in/curvet-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/Curvet-in/curvet-sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
