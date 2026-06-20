@@ -34,6 +34,19 @@ export interface VideoGenerateParams {
   [key: string]: unknown;
 }
 
+export interface AudioGenerateParams {
+  model: ModelId;
+  prompt: string;
+  voice?: string;
+  [key: string]: unknown;
+}
+
+export interface ThreeDGenerateParams {
+  model: ModelId;
+  prompt: string;
+  [key: string]: unknown;
+}
+
 export interface PollOptions {
   /** Poll interval in ms (default 2500). */
   pollIntervalMs?: number;

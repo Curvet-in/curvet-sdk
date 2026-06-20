@@ -30,7 +30,7 @@ export interface FetchResponse {
 export interface FetchInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | FormData;
   signal?: AbortSignal;
 }
 

@@ -41,10 +41,15 @@ export class HttpClient {
       accept: "application/json",
       ...(options?.headers ?? {}),
     };
-    let payload: string | undefined;
+    let payload: string | FormData | undefined;
     if (body !== undefined) {
-      headers["content-type"] = "application/json";
-      payload = JSON.stringify(body);
+      if (typeof FormData !== "undefined" && body instanceof FormData) {
+        // Multipart — let fetch set the content-type (with boundary).
+        payload = body;
+      } else {
+        headers["content-type"] = "application/json";
+        payload = JSON.stringify(body);
+      }
     }
 
     let attempt = 0;

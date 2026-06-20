@@ -83,11 +83,41 @@ if (job.status !== "completed") {
 const status = await curvet.jobs.retrieve(job.jobId!);
 ```
 
-### Models & balance
+### Audio & 3D (async, same as video)
+
+```ts
+const audio = await curvet.audio.generate({ model: "fish-audio", prompt: "Hello there" });
+const mesh = await curvet.threeD.generate({ model: "meshy-3d", prompt: "a ceramic mug" });
+console.log(audio.mediaUrl, mesh.mediaUrl);
+```
+
+### Models, balance & analytics
 
 ```ts
 const chatModels = await curvet.models.list({ type: "chat" });
 const balance = await curvet.balance.get();
+const analytics = await curvet.analytics.get({ startDate: "2026-01-01", endDate: "2026-02-01" });
+```
+
+### Workflows
+
+```ts
+// JSON inputs:
+const out = await curvet.workflows.run("workflowId", { inputs: { topic: "ai" } });
+
+// With file inputs (multipart, handled for you):
+await curvet.workflows.run("workflowId", {
+  inputs: { caption: "hello" },
+  files: { image: new Blob([bytes], { type: "image/png" }) },
+});
+```
+
+### Food & speech-to-text
+
+```ts
+const dishes = await curvet.food.search("paneer", { limit: 5 });
+const stt = await curvet.voice.stt({ audio: audioBytes, filename: "clip.wav" });
+console.log(stt.text);
 ```
 
 ## Errors
