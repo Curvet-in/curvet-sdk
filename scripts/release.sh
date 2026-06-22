@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Release @curvet/sdk to npm from your machine (no CI, no token).
-# `npm publish` will prompt you to authorize with your passkey — approve it.
+# 'npm publish' will prompt you to authorize with your passkey -- approve it.
 #
 # Usage:
 #   ./scripts/release.sh            # publish the CURRENT package.json version
@@ -11,11 +11,11 @@
 #
 # Order is deliberate: validate -> bump+tag (local) -> publish -> push.
 # If publish is cancelled/fails, nothing is pushed to GitHub; just fix and
-# re-run `npm publish && git push --follow-tags origin main` to finish.
+# re-run 'npm publish && git push --follow-tags origin main' to finish.
 set -euo pipefail
 
 BUMP="${1:-}"
-if [[ -n "$BUMP" && "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
+if [ -n "${BUMP}" ] && [ "${BUMP}" != "patch" ] && [ "${BUMP}" != "minor" ] && [ "${BUMP}" != "major" ]; then
   echo "Usage: ./scripts/release.sh [patch|minor|major]" >&2
   exit 1
 fi
@@ -23,43 +23,43 @@ fi
 cd "$(dirname "$0")/.."
 
 # Guardrails
-branch=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$branch" != "main" ]]; then
-  echo "✋ Releases must be cut from 'main' (currently on '$branch')." >&2
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "${branch}" != "main" ]; then
+  echo "Releases must be cut from 'main' (currently on '${branch}')." >&2
   exit 1
 fi
-if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
-  echo "✋ Working tree has uncommitted changes. Commit or stash first." >&2
+if [ -n "$(git status --porcelain | grep -v '^??')" ]; then
+  echo "Working tree has uncommitted changes. Commit or stash first." >&2
   exit 1
 fi
 
 # Validate before bumping so we never tag a broken version.
-echo "▶ Validating (install, typecheck, test, build)…"
+echo "==> Validating (install, typecheck, test, build)..."
 npm ci
 npm run typecheck
 npm test
 npm run build
 
 # Bump (optional). npm version commits and creates the vX.Y.Z tag.
-if [[ -n "$BUMP" ]]; then
-  echo "▶ Bumping $BUMP…"
-  npm version "$BUMP" -m "release: v%s"
+if [ -n "${BUMP}" ]; then
+  echo "==> Bumping ${BUMP}..."
+  npm version "${BUMP}" -m "release: v%s"
 fi
 
 VERSION="v$(node -p "require('./package.json').version")"
 
 # Tag the current version if it isn't tagged yet (e.g. no-bump release).
-if ! git rev-parse "$VERSION" >/dev/null 2>&1; then
-  git tag -a "$VERSION" -m "release $VERSION"
+if ! git rev-parse "${VERSION}" >/dev/null 2>&1; then
+  git tag -a "${VERSION}" -m "release ${VERSION}"
 fi
 
 # Publish. npm will prompt for passkey/2FA authorization in your browser.
-echo "▶ Publishing @curvet/sdk@${VERSION#v} to npm…"
-echo "   (npm will ask you to authorize with your passkey — approve it to continue.)"
+echo "==> Publishing @curvet/sdk@${VERSION#v} to npm..."
+echo "    (npm will ask you to authorize with your passkey -- approve it to continue.)"
 npm publish
 
 # Only reached after a successful publish.
-echo "▶ Pushing $VERSION to GitHub…"
+echo "==> Pushing ${VERSION} to GitHub..."
 git push --follow-tags origin main
 
-echo "✅ Published @curvet/sdk@${VERSION#v} and pushed $VERSION."
+echo "OK: published @curvet/sdk@${VERSION#v} and pushed ${VERSION}."
