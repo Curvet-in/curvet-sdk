@@ -185,29 +185,27 @@ npm run build   # ESM + CJS + d.ts via tsup
 CURVET_TEST_APP_KEY=cvt_app_xxx npm test
 ```
 
-## Releasing (no npm token)
+## Releasing
 
-Publishing runs in CI via **npm Trusted Publishing (OIDC)** — there is no npm
-token to create or store. One-time setup on npmjs.com: open the `@curvet/sdk`
-package → **Settings → Trusted Publisher → GitHub Actions**, and enter:
-
-| Field | Value |
-|---|---|
-| Organization / user | `Curvet-in` |
-| Repository | `curvet-sdk` |
-| Workflow filename | `publish.yml` |
-
-After that, cut a release with the helper (it bumps, tags, pushes, and creates
-the GitHub Release that triggers the OIDC publish):
+Publishing happens locally with the release script — no npm token, no CI.
+`npm publish` prompts for your passkey/2FA, which you approve in the browser.
 
 ```bash
-./scripts/release.sh            # release the current package.json version
-./scripts/release.sh patch      # bump patch, then release
-./scripts/release.sh minor      # bump minor, then release
+./scripts/release.sh            # publish the current package.json version
+./scripts/release.sh patch      # bump patch, then publish  (0.2.0 -> 0.2.1)
+./scripts/release.sh minor      # bump minor, then publish
+./scripts/release.sh major      # bump major, then publish
 ```
 
-The [`publish.yml`](.github/workflows/publish.yml) workflow runs the test suite,
-skips if the version is already on npm, and publishes with provenance.
+The script validates (typecheck + tests + build) before bumping, tags the
+version, publishes (you approve the passkey prompt), then pushes the tag and
+commit to GitHub. The order is deliberate — if the publish is cancelled,
+nothing is pushed; just re-run `npm publish && git push --follow-tags origin main`
+to finish.
+
+> A tokenless CI alternative using npm Trusted Publishing (OIDC) is also included
+> at [`.github/workflows/publish.yml`](.github/workflows/publish.yml) for when
+> GitHub Actions is available.
 
 ## License
 

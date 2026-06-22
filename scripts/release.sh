@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# Release @curvet/sdk. No npm token needed — publishing happens in CI via npm
-# Trusted Publishing (OIDC); this script just bumps, tags, and cuts the GitHub
-# Release that triggers .github/workflows/publish.yml.
+# Release @curvet/sdk to npm from your machine (no CI, no token).
+# `npm publish` will prompt you to authorize with your passkey — approve it.
 #
 # Usage:
-#   ./scripts/release.sh            # release the CURRENT package.json version
-#   ./scripts/release.sh patch      # bump patch, then release   (0.2.0 -> 0.2.1)
-#   ./scripts/release.sh minor      # bump minor, then release   (0.2.0 -> 0.3.0)
-#   ./scripts/release.sh major      # bump major, then release   (0.2.0 -> 1.0.0)
+#   ./scripts/release.sh            # publish the CURRENT package.json version
+#   ./scripts/release.sh patch      # bump patch, then publish   (0.2.0 -> 0.2.1)
+#   ./scripts/release.sh minor      # bump minor, then publish   (0.2.0 -> 0.3.0)
+#   ./scripts/release.sh major      # bump major, then publish   (0.2.0 -> 1.0.0)
 #
-# Prereqs: gh CLI authenticated; the npm Trusted Publisher configured once on
-# npmjs.com (see .github/workflows/publish.yml header).
+# Order is deliberate: validate -> bump+tag (local) -> publish -> push.
+# If publish is cancelled/fails, nothing is pushed to GitHub; just fix and
+# re-run `npm publish && git push --follow-tags origin main` to finish.
 set -euo pipefail
 
 BUMP="${1:-}"
@@ -33,14 +33,14 @@ if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
   exit 1
 fi
 
-# Sanity gate (same checks CI runs)
-echo "▶ Installing & validating…"
+# Validate before bumping so we never tag a broken version.
+echo "▶ Validating (install, typecheck, test, build)…"
 npm ci
 npm run typecheck
 npm test
 npm run build
 
-# Bump (optional). npm version commits and tags vX.Y.Z.
+# Bump (optional). npm version commits and creates the vX.Y.Z tag.
 if [[ -n "$BUMP" ]]; then
   echo "▶ Bumping $BUMP…"
   npm version "$BUMP" -m "release: v%s"
@@ -48,16 +48,18 @@ fi
 
 VERSION="v$(node -p "require('./package.json').version")"
 
-# Ensure a tag exists for the current version (when no bump was requested).
+# Tag the current version if it isn't tagged yet (e.g. no-bump release).
 if ! git rev-parse "$VERSION" >/dev/null 2>&1; then
   git tag -a "$VERSION" -m "release $VERSION"
 fi
 
-echo "▶ Pushing $VERSION…"
+# Publish. npm will prompt for passkey/2FA authorization in your browser.
+echo "▶ Publishing @curvet/sdk@${VERSION#v} to npm…"
+echo "   (npm will ask you to authorize with your passkey — approve it to continue.)"
+npm publish
+
+# Only reached after a successful publish.
+echo "▶ Pushing $VERSION to GitHub…"
 git push --follow-tags origin main
 
-echo "▶ Creating GitHub release $VERSION (this triggers the OIDC publish)…"
-gh release create "$VERSION" --title "$VERSION" --generate-notes
-
-echo "✅ Release $VERSION created. Watch the publish at:"
-echo "   https://github.com/Curvet-in/curvet-sdk/actions/workflows/publish.yml"
+echo "✅ Published @curvet/sdk@${VERSION#v} and pushed $VERSION."
