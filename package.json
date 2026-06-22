@@ -1,6 +1,6 @@
 {
   "name": "@curvet/sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Official TypeScript SDK for the Curvet Unified Playground API (chat, image, and video generation across providers, one API key).",
   "license": "MIT",
   "author": "Curvet <hello@curvet.in>",
