@@ -67,6 +67,24 @@ export class JobTimeoutError extends CurvetError {
   }
 }
 
+/** An async workflow run finished with status "failed" (or "stopped"). */
+export class WorkflowRunFailedError extends CurvetError {
+  readonly runId: string;
+  constructor(message: string, runId: string, opts: CurvetErrorOptions = {}) {
+    super(message, opts);
+    this.runId = runId;
+  }
+}
+
+/** An async workflow run did not finish within the poll timeout. */
+export class WorkflowRunTimeoutError extends CurvetError {
+  readonly runId: string;
+  constructor(message: string, runId: string, opts: CurvetErrorOptions = {}) {
+    super(message, opts);
+    this.runId = runId;
+  }
+}
+
 interface HeaderBag {
   get(name: string): string | null;
 }

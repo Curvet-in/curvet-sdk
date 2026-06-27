@@ -14,6 +14,8 @@ export {
   RateLimitError,
   JobFailedError,
   JobTimeoutError,
+  WorkflowRunFailedError,
+  WorkflowRunTimeoutError,
 } from "./core/errors";
 export type { CurvetErrorOptions } from "./core/errors";
 
@@ -33,8 +35,16 @@ export { Balance } from "./resources/balance";
 export type { BalanceInfo } from "./resources/balance";
 export { Analytics } from "./resources/analytics";
 export type { AnalyticsParams, AnalyticsResult } from "./resources/analytics";
-export { Workflows } from "./resources/workflows";
-export type { WorkflowRunParams, WorkflowRunResult } from "./resources/workflows";
+export { Workflows, WorkflowRuns } from "./resources/workflows";
+export type {
+  WorkflowRunParams,
+  WorkflowRunResult,
+  WorkflowRunStatus,
+  WorkflowRunNode,
+  WorkflowRun,
+  WorkflowSubmitResult,
+  WorkflowPollOptions,
+} from "./resources/workflows";
 export { Food } from "./resources/food";
 export type { FoodItem } from "./resources/food";
 export { Voice } from "./resources/voice";

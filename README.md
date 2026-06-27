@@ -112,6 +112,22 @@ await curvet.workflows.run("workflowId", {
 });
 ```
 
+For long workflows (video/audio/3D nodes), use the **pollable** API — submit
+and auto-poll to completion with live progress, instead of one long HTTP call:
+
+```ts
+const run = await curvet.workflows.runAndPoll(
+  "workflowId",
+  { inputs: { topic: "ai" } },
+  { onProgress: (r) => console.log(r.status, r.progress + "%", r.currentNode?.label) },
+);
+console.log(run.result);
+
+// Or fire-and-forget + poll yourself:
+const { runId } = await curvet.workflows.submit("workflowId", { inputs: {} });
+const status = await curvet.workflows.runs.retrieve(runId);
+```
+
 ### Food & speech-to-text
 
 ```ts
