@@ -223,6 +223,10 @@ to finish.
 > at [`.github/workflows/publish.yml`](.github/workflows/publish.yml) for when
 > GitHub Actions is available.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## License
 
 MIT
