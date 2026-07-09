@@ -13,6 +13,8 @@ export interface HttpClientOptions {
   timeout: number;
   maxRetries: number;
   fetch: FetchLike;
+  /** Header carrying the credential (default "x-app-key"; enterprise uses "x-enterprise-key"). */
+  authHeaderName?: string;
 }
 
 export interface RequestArgs {
@@ -37,7 +39,7 @@ export class HttpClient {
     const timeout = options?.timeout ?? this.opts.timeout;
 
     const headers: Record<string, string> = {
-      "x-app-key": this.opts.appKey,
+      [this.opts.authHeaderName ?? "x-app-key"]: this.opts.appKey,
       accept: "application/json",
       ...(options?.headers ?? {}),
     };
