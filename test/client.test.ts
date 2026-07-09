@@ -5,10 +5,16 @@ import { mockFetch } from "./helpers";
 describe("Curvet client", () => {
   beforeEach(() => {
     delete process.env.CURVET_APP_KEY;
+    delete process.env.CURVET_ENTERPRISE_KEY;
   });
 
-  it("throws when no app key is provided", () => {
-    expect(() => new Curvet({})).toThrow(/Missing Curvet app key/);
+  it("throws when no credentials are provided", () => {
+    expect(() => new Curvet({})).toThrow(/Missing credentials/);
+  });
+
+  it("accepts an enterprise key alone (no app key required)", () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { success: true } }));
+    expect(() => new Curvet({ enterpriseKey: "cvent_ent_x", fetch })).not.toThrow();
   });
 
   it("reads the app key from CURVET_APP_KEY", () => {
