@@ -13,12 +13,18 @@ import { Analytics } from "./resources/analytics";
 import { Workflows } from "./resources/workflows";
 import { Food } from "./resources/food";
 import { Voice } from "./resources/voice";
+import { Enterprise } from "./resources/enterprise";
 
 export const DEFAULT_BASE_URL = "https://curvet.ai/api/v1/playground";
 
 export interface CurvetOptions {
   /** Your app key. Falls back to the CURVET_APP_KEY env var. */
   appKey?: string;
+  /**
+   * Enterprise API key (org-scoped, admin-capable). Falls back to the
+   * CURVET_ENTERPRISE_KEY env var. Required to use `curvet.enterprise.*`.
+   */
+  enterpriseKey?: string;
   /** Override the playground base URL (defaults to production). */
   baseURL?: string;
   /** Per-request timeout in ms (default 60000). */
@@ -57,12 +63,16 @@ export class Curvet {
   readonly workflows: Workflows;
   readonly food: Food;
   readonly voice: Voice;
+  /** Enterprise admin API (requires an Enterprise API key). */
+  readonly enterprise: Enterprise;
 
   constructor(options: CurvetOptions = {}) {
     const appKey = options.appKey ?? envKey();
-    if (!appKey) {
+    const enterpriseKey = options.enterpriseKey ?? envEnterpriseKey();
+    if (!appKey && !enterpriseKey) {
       throw new CurvetError(
-        "Missing Curvet app key. Pass { appKey } or set the CURVET_APP_KEY environment variable.",
+        "Missing credentials. Pass { appKey } (or CURVET_APP_KEY) for the playground, " +
+          "or { enterpriseKey } (or CURVET_ENTERPRISE_KEY) for the enterprise API.",
       );
     }
     const fetchImpl = options.fetch ?? defaultFetch();
@@ -73,17 +83,24 @@ export class Curvet {
     }
 
     const playgroundBase = options.baseURL ?? DEFAULT_BASE_URL;
-    // Sibling routes (food, voice) live one level up at /api/v1/*.
+    // Sibling routes (food, voice, enterprise) live one level up at /api/v1/*.
     const v1Base = playgroundBase.replace(/\/playground\/?$/, "");
 
     const shared = {
-      appKey,
       timeout: options.timeout ?? 60_000,
       maxRetries: options.maxRetries ?? 2,
       fetch: fetchImpl,
     };
-    const client = new HttpClient({ ...shared, baseURL: playgroundBase });
-    const v1Client = new HttpClient({ ...shared, baseURL: v1Base });
+    // Playground/v1 resources authenticate with the app key.
+    const client = new HttpClient({ ...shared, appKey: appKey ?? "", baseURL: playgroundBase });
+    const v1Client = new HttpClient({ ...shared, appKey: appKey ?? "", baseURL: v1Base });
+    // Enterprise resources authenticate with the Enterprise API key.
+    const enterpriseClient = new HttpClient({
+      ...shared,
+      appKey: enterpriseKey ?? "",
+      authHeaderName: "x-enterprise-key",
+      baseURL: `${v1Base}/enterprise`,
+    });
 
     const jobDefaults = {
       pollIntervalMs: options.defaultPollIntervalMs ?? 2500,
@@ -102,11 +119,16 @@ export class Curvet {
     this.workflows = new Workflows(client);
     this.food = new Food(v1Client);
     this.voice = new Voice(v1Client);
+    this.enterprise = new Enterprise(enterpriseClient);
   }
 }
 
 function envKey(): string | undefined {
   return typeof process !== "undefined" ? process.env?.CURVET_APP_KEY : undefined;
+}
+
+function envEnterpriseKey(): string | undefined {
+  return typeof process !== "undefined" ? process.env?.CURVET_ENTERPRISE_KEY : undefined;
 }
 
 function defaultFetch(): FetchLike | undefined {

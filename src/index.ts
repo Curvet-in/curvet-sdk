@@ -49,6 +49,15 @@ export { Food } from "./resources/food";
 export type { FoodItem } from "./resources/food";
 export { Voice } from "./resources/voice";
 export type { SttParams, SttResult } from "./resources/voice";
+export { Enterprise } from "./resources/enterprise";
+export type {
+  EnterpriseRole,
+  CreateInviteParams,
+  EnterpriseInvite,
+  CreateInviteResult,
+  EnterpriseMember,
+  EnterpriseOverview,
+} from "./resources/enterprise";
 
 // Types
 export type { Usage, RequestOptions, FetchLike } from "./types/common";
