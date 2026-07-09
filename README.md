@@ -24,12 +24,27 @@ Requires Node 18+ (uses the built-in `fetch`). For older runtimes, pass a `fetch
 
 ## Authentication
 
-Get an **App Key** from the Curvet Developer Portal (with Playground API access enabled). Provide it directly or via the `CURVET_APP_KEY` environment variable.
+The client accepts **either or both** of two credentials:
+
+- **App Key** (`x-app-key`) — for the Playground API (chat, image, video, audio, 3D, workflows, food, voice, balance, analytics). Get one from the Curvet Developer Portal with Playground access enabled. Env: `CURVET_APP_KEY`.
+- **Enterprise API key** (`x-enterprise-key`) — an org-scoped admin key for the Enterprise API (`curvet.enterprise.*` — members, invites, per-member credits). Env: `CURVET_ENTERPRISE_KEY`.
+
+Provide whichever you need — **app key only**, **enterprise key only**, or **both**:
 
 ```ts
+// Playground only
 const curvet = new Curvet({ appKey: "cvt_app_..." });
-// or: export CURVET_APP_KEY=cvt_app_...  then  new Curvet()
+
+// Enterprise only
+const curvet = new Curvet({ enterpriseKey: "cvent_ent_..." });
+
+// Both — playground + enterprise from a single client
+const curvet = new Curvet({ appKey: "cvt_app_...", enterpriseKey: "cvent_ent_..." });
+
+// …or via env (CURVET_APP_KEY / CURVET_ENTERPRISE_KEY), then: new Curvet()
 ```
+
+The constructor throws only if **neither** is provided. Each credential unlocks its own methods — `curvet.chat.*` / media / workflows need the app key; `curvet.enterprise.*` needs the enterprise key. Calling a family you didn't supply a key for returns `401`.
 
 ## Usage
 
@@ -136,6 +151,37 @@ const stt = await curvet.voice.stt({ audio: audioBytes, filename: "clip.wav" });
 console.log(stt.text);
 ```
 
+### Enterprise (admin)
+
+For enterprise customers: manage your organization with an **enterprise key** — invite members, set per-member credit allotments funded from your org pool, and read your dashboard. Requires `enterpriseKey` (org-scoped; sent as `x-enterprise-key`).
+
+```ts
+const curvet = new Curvet({ enterpriseKey: process.env.CURVET_ENTERPRISE_KEY });
+
+// Dashboard: pool balance, seats, per-member usage
+const overview = await curvet.enterprise.overview();
+console.log(overview.pool.balance, overview.memberCount);
+
+// Invite a teammate — single-use link; the allotment is reserved from your
+// pool when they sign up, and they see only their own credits (never the pool).
+const { url } = await curvet.enterprise.invites.create({
+  allottedCredits: 1000,
+  role: "member",      // or "admin"
+  expiresInDays: 30,
+});
+await curvet.enterprise.invites.list();
+await curvet.enterprise.invites.revoke(inviteId);
+
+// Members
+const members = await curvet.enterprise.members.list();
+await curvet.enterprise.members.assignCredits(uid, 500);  // +assign / −reclaim (from pool)
+await curvet.enterprise.members.setLimit(uid, 2000);      // monthly cap (0 = uncapped)
+await curvet.enterprise.members.setRole(uid, "admin");
+await curvet.enterprise.members.remove(uid);              // reclaims their credits
+```
+
+Assigning more than the pool holds throws `InsufficientBalanceError` (`402`) — top up the pool and retry.
+
 ## Errors
 
 Every failure throws a typed subclass of `CurvetError`:
@@ -160,7 +206,7 @@ try {
 
 | Class | When |
 |---|---|
-| `AuthError` | 401 — missing/invalid app key |
+| `AuthError` | 401 — missing/invalid app key or enterprise key |
 | `PermissionError` | 403 — app inactive, playground disabled, model/category not allowed |
 | `BadRequestError` | 400 — invalid/unknown model or payload |
 | `InsufficientBalanceError` | 402 — not enough credits (`.required`, `.available`) |
@@ -178,6 +224,7 @@ try {
 ```ts
 new Curvet({
   appKey: "cvt_app_...",
+  enterpriseKey: "cvent_ent_...", // optional — enables curvet.enterprise.*
   baseURL: "https://curvet.ai/api/v1/playground", // override for staging
   timeout: 60_000,            // per-request, ms
   maxRetries: 2,
