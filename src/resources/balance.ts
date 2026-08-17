@@ -11,6 +11,16 @@ export interface BalanceInfo {
     organizationLimit?: number;
     monthlyUsed?: number;
     isEnterprise?: boolean;
+    /** Enterprise credits allotted to this member's own bucket. */
+    enterpriseCredits?: number;
+    /** Of those, what the monthly cap currently allows them to spend. */
+    enterpriseSpendable?: number;
+    /** Whether this member spends the shared org pool directly. */
+    drawsFromPool?: boolean;
+    /** Full org pool balance — only present for members who draw it. */
+    orgPoolCredits?: number;
+    /** Pool credits spendable right now, after the monthly cap. */
+    orgPoolSpendable?: number;
     [key: string]: unknown;
   };
   [key: string]: unknown;

@@ -182,6 +182,35 @@ await curvet.enterprise.members.remove(uid);              // reclaims their cred
 
 Assigning more than the pool holds throws `InsufficientBalanceError` (`402`) — top up the pool and retry.
 
+#### Spending straight from the pool
+
+Some people shouldn't need an allotment at all — an org admin, or a teacher whose usage bills to the school. Those members draw the **shared pool** directly:
+
+```ts
+// Grant it (admins already have it by default)
+await curvet.enterprise.members.setPoolAccess(uid, true);
+
+// Revoke it — even for an admin
+await curvet.enterprise.members.setPoolAccess(uid, false);
+
+// Restore the role default: admins draw the pool, plain members don't
+await curvet.enterprise.members.setPoolAccess(uid, null);
+```
+
+Two things worth knowing:
+
+- **The monthly cap still applies.** It bounds *company* money as a whole, so a member's own allotment and their pool draw share one budget — pool access is not an unlimited budget. Set `setLimit(uid, 0)` for genuinely uncapped.
+- **Their own allotment is spent first**, then the pool, then their personal credits. Allotted credits never sit stranded while the pool drains.
+
+`members.list()` reports both the stored setting and what it resolves to:
+
+```ts
+const [m] = await curvet.enterprise.members.list();
+m.drawsFromPool;           // true | false | null  ← null means "inherited"
+m.drawsFromPoolEffective;  // boolean — what actually applies right now
+m.used;                    // company credits spent this month (allotment + pool)
+```
+
 ## Errors
 
 Every failure throws a typed subclass of `CurvetError`:

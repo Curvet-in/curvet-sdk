@@ -48,12 +48,30 @@ export interface EnterpriseMember {
   displayName?: string;
   photoURL?: string;
   role: EnterpriseRole;
+  /** Enterprise credits currently reserved in this member's own bucket. */
   allotted: number;
+  /** Company credits spent this month — their own bucket plus any org-pool draw. */
   used: number;
   remaining: number | null;
+  /** Monthly cap on COMPANY spend (bucket + pool combined). 0 = no cap. */
   cap: number;
   personalCredits: number;
+  /**
+   * Explicit pool-access setting, or null when it's inherited from the role.
+   * Use `drawsFromPoolEffective` for what actually applies.
+   */
+  drawsFromPool: boolean | null;
+  /** Whether this member currently spends the shared org pool directly. */
+  drawsFromPoolEffective: boolean;
   isRestricted: boolean;
+}
+
+export interface SetPoolAccessResult {
+  success: boolean;
+  /** The stored setting: true, false, or null for "inherit from role". */
+  drawsFromPool: boolean | null;
+  /** What that resolves to right now. */
+  effective: boolean;
 }
 
 export interface EnterpriseOverview {
@@ -135,7 +153,36 @@ class EnterpriseMembers {
     });
   }
 
-  /** Set a member's monthly spend cap (0 = no cap). */
+  /**
+   * Grant or revoke a member's ability to spend the shared org pool directly,
+   * without first being allotted credits of their own.
+   *
+   * Pass `null` to restore the default, which is derived from their role:
+   * admins draw the pool, plain members don't.
+   *
+   * Their monthly `cap` still bounds total company spend, so this grants access
+   * to the pool — not an unlimited budget.
+   *
+   * ```ts
+   * // A teacher account that bills to the school's pool.
+   * await curvet.enterprise.members.setPoolAccess(uid, true);
+   * await curvet.enterprise.members.setLimit(uid, 5000); // 5,000 credits/month
+   * ```
+   */
+  async setPoolAccess(
+    firebaseUid: string,
+    drawsFromPool: boolean | null,
+    options?: RequestOptions,
+  ): Promise<SetPoolAccessResult> {
+    return this.client.request<SetPoolAccessResult>({
+      method: "PATCH",
+      path: `/members/${firebaseUid}/pool-access`,
+      body: { drawsFromPool },
+      options,
+    });
+  }
+
+  /** Set a member's monthly cap on company spend (0 = no cap). */
   async setLimit(
     firebaseUid: string,
     creditLimit: number,
