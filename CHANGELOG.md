@@ -5,6 +5,24 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0
+
+### Added
+
+- `workflows.list(params?)` — list the workflows a key can run, most recently
+  updated first. Supports `limit` (clamped server-side to 1–100) and `q` title
+  search. Returns summaries without the node graph.
+- `workflows.retrieve(id)` — one workflow plus **the input keys it accepts**,
+  derived server-side from the node graph by the same rules the runner applies.
+  Use these to build the `inputs` object for `run`/`submit` instead of guessing
+  at key names — each carries `name`, `type`, `required`, and the `aliases` the
+  runner will also accept.
+- New types: `WorkflowSummary`, `WorkflowDetail`, `WorkflowInput`,
+  `WorkflowListParams`.
+
+Requires the backend from darkapp-haven 0.51.10 or later.
+
+
 ## [0.5.0] - 2026-08-17
 
 ### Added

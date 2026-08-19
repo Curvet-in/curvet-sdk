@@ -98,3 +98,106 @@ describe("workflows.runAndPoll", () => {
     expect(err.runId).toBe("run_t");
   });
 });
+
+describe("workflows.list", () => {
+  it("GETs /workflows and unwraps the array", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: {
+        success: true,
+        workflows: [
+          { id: "w1", title: "Digest", description: null, nodeCount: 3, tags: [] },
+          { id: "w2", title: "Parser", description: "d", nodeCount: 7, tags: ["ops"] },
+        ],
+      },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    const list = await curvet.workflows.list();
+
+    expect(list.map((w) => w.id)).toEqual(["w1", "w2"]);
+    expect(list[0].nodeCount).toBe(3);
+    expect(fetch.calls[0].url).toBe("https://curvet.ai/api/v1/playground/workflows");
+    expect(fetch.calls[0].init.method).toBe("GET");
+  });
+
+  it("passes limit and q as query params", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { success: true, workflows: [] } }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    await curvet.workflows.list({ limit: 5, q: "digest" });
+
+    const url = new URL(fetch.calls[0].url);
+    expect(url.searchParams.get("limit")).toBe("5");
+    expect(url.searchParams.get("q")).toBe("digest");
+  });
+
+  it("omits absent params rather than sending empties", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { success: true, workflows: [] } }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    await curvet.workflows.list({ q: "x" });
+
+    const url = new URL(fetch.calls[0].url);
+    expect(url.searchParams.has("limit")).toBe(false);
+    expect(url.searchParams.get("q")).toBe("x");
+  });
+
+  it("tolerates a response with no workflows key", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { success: true } }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    expect(await curvet.workflows.list()).toEqual([]);
+  });
+});
+
+describe("workflows.retrieve", () => {
+  it("GETs one workflow and returns its declared inputs", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: {
+        success: true,
+        workflow: {
+          id: "w1",
+          title: "Transcribe",
+          description: null,
+          nodeCount: 3,
+          tags: [],
+          inputs: [
+            {
+              name: "Recording",
+              type: "audio",
+              required: true,
+              nodeId: "t1",
+              nodeLabel: "Recording",
+              aliases: ["url", "audioUrl"],
+            },
+          ],
+        },
+      },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    const wf = await curvet.workflows.retrieve("w1");
+
+    expect(wf.title).toBe("Transcribe");
+    expect(wf.inputs[0].name).toBe("Recording");
+    expect(wf.inputs[0].required).toBe(true);
+    expect(fetch.calls[0].url).toBe("https://curvet.ai/api/v1/playground/workflows/w1");
+  });
+
+  it("url-encodes the id", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: { success: true, workflow: { id: "a/b", title: "t", nodeCount: 0, tags: [], inputs: [] } },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    await curvet.workflows.retrieve("a/b");
+    expect(fetch.calls[0].url).toBe("https://curvet.ai/api/v1/playground/workflows/a%2Fb");
+  });
+
+  it("does not collide with the run-status route", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: { success: true, runId: "r1", status: "completed" },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+    await curvet.workflows.runs.retrieve("r1");
+    expect(fetch.calls[0].url).toBe("https://curvet.ai/api/v1/playground/workflows/runs/r1");
+  });
+});

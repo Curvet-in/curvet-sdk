@@ -116,6 +116,22 @@ const analytics = await curvet.analytics.get({ startDate: "2026-01-01", endDate:
 
 ### Workflows
 
+Find one without leaving your code — and learn what inputs it takes, rather than
+guessing at key names and paying for a failed run to find out:
+
+```ts
+const workflows = await curvet.workflows.list({ q: "digest", limit: 10 });
+// → [{ id, title, description, nodeCount, tags, updatedAt }, ...]
+
+const wf = await curvet.workflows.retrieve(workflows[0].id);
+for (const input of wf.inputs) {
+  console.log(input.name, input.type, input.required ? "(required)" : "(optional)");
+}
+```
+
+`inputs` is derived from the workflow's node graph by the same rules the runner
+applies, so those names are exactly the keys `run`/`submit` will read.
+
 ```ts
 // JSON inputs:
 const out = await curvet.workflows.run("workflowId", { inputs: { topic: "ai" } });

@@ -44,6 +44,10 @@ export type {
   WorkflowRun,
   WorkflowSubmitResult,
   WorkflowPollOptions,
+  WorkflowSummary,
+  WorkflowInput,
+  WorkflowDetail,
+  WorkflowListParams,
 } from "./resources/workflows";
 export { Food } from "./resources/food";
 export type { FoodItem } from "./resources/food";

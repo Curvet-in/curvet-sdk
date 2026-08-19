@@ -56,6 +56,47 @@ export interface WorkflowRun {
   raw: unknown;
 }
 
+/** A workflow as it appears in a listing (no node graph — see `retrieve`). */
+export interface WorkflowSummary {
+  id: string;
+  title: string;
+  description: string | null;
+  /** Number of nodes in the graph. The graph itself is never sent in a listing. */
+  nodeCount: number;
+  tags: string[];
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * An input key a workflow accepts, derived server-side from its node graph by
+ * the same rules the runner applies — so these are the keys `run`/`submit`
+ * will actually read from `inputs`.
+ */
+export interface WorkflowInput {
+  /** The key to set in `inputs`. */
+  name: string;
+  type: "text" | "audio" | (string & {});
+  /** True when omitting it fails the run rather than defaulting to empty. */
+  required: boolean;
+  nodeId: string | null;
+  nodeLabel: string | null;
+  /** Other keys the runner accepts for this input. */
+  aliases: string[];
+}
+
+export interface WorkflowDetail extends WorkflowSummary {
+  inputs: WorkflowInput[];
+}
+
+export interface WorkflowListParams {
+  /** Max results, clamped server-side to 1-100 (default 50). */
+  limit?: number;
+  /** Case-insensitive title search. */
+  q?: string;
+}
+
 export interface WorkflowSubmitResult {
   runId: string;
   status: WorkflowRunStatus;
@@ -131,6 +172,39 @@ export class Workflows {
 
   constructor(private client: HttpClient) {
     this.runs = new WorkflowRuns(client);
+  }
+
+  /**
+   * List the workflows this key can run, most recently updated first.
+   *
+   * Scoped to the same owner-or-collaborator rule `run` authorises with, so
+   * everything listed here is runnable.
+   */
+  async list(
+    params: WorkflowListParams = {},
+    options?: RequestOptions,
+  ): Promise<WorkflowSummary[]> {
+    const body = await this.client.request<{ success: boolean; workflows: WorkflowSummary[] }>({
+      method: "GET",
+      path: "/workflows",
+      query: { limit: params.limit, q: params.q },
+      options,
+    });
+    return body.workflows ?? [];
+  }
+
+  /**
+   * Fetch one workflow, including the input keys it accepts — use these to
+   * build the `inputs` object for {@link run} or {@link submit} instead of
+   * guessing at key names.
+   */
+  async retrieve(id: string, options?: RequestOptions): Promise<WorkflowDetail> {
+    const body = await this.client.request<{ success: boolean; workflow: WorkflowDetail }>({
+      method: "GET",
+      path: `/workflows/${encodeURIComponent(id)}`,
+      options,
+    });
+    return body.workflow;
   }
 
   /**
