@@ -5,6 +5,47 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0
+
+### Added
+
+- **Model catalogue flags.** `ModelInfo` now declares what the gateway has been
+  returning all along: `capability` (`"generation" | "transcription"`),
+  `available`, `comingSoon`, `endpoint`, `surface`, and `pricing` (per-million
+  token rates, null for flat-rate modalities).
+- `models.list({ capability })` — filter the catalogue by what a model *does*.
+  This is the fix for a real footgun: `ali-qwen3-asr-flash`, `whisper-large-v3`,
+  `elevenlabs-scribe` and `voxtral-mini-3b-2507` are all `type: "audio"` but are
+  speech-to-**text**. They take a file on `voice.stt()`, not a prompt on
+  `audio.generate()`, and until now nothing in the catalogue said so. Use
+  `list({ type: "audio", capability: "generation" })` to pick a TTS model.
+- `models.list({ include: "all" })` — the full catalogue including coming-soon
+  and dashboard-only entries, flagged rather than filtered. The default stays
+  `"runnable"`: only models this key can call right now.
+- New types: `ModelCapability`, `ModelSurface`, `ModelPricing`, `ModelsInclude`,
+  `AnalyticsOverview`, `AnalyticsBreakdownRow`.
+- `SttResult.requestId` / `.status`, and `SttParams.model` typed as `ModelId`.
+- `MediaJob.cost` is typed (`JobCost`) instead of `unknown`. It is the only cost
+  a poller ever sees: a job from `generate()` carries `usage` in credits, while
+  the same job read back through `jobs.retrieve()` carries `cost` in USD and no
+  usage at all.
+
+### Fixed
+
+- **`AnalyticsResult` matched no deployment.** It declared a flat
+  `{ totalRequests, totalCost, requestsByModel, requestsByCategory }`; the API
+  returns `{ overview, modelBreakdown, categoryBreakdown, statusBreakdown,
+  errorBreakdown }` with per-model cost and latency. The real shape is now
+  declared, with the flat keys retained (deprecated) for older deployments.
+- The model cache was a single slot shared by every query, so a
+  `list({ include: "all" })` and a plain `list()` could serve each other's
+  results. It is now keyed by `include`.
+
+Live contract canaries covering both drifts were added to the integration suite
+(`CURVET_TEST_APP_KEY=… npm test`), since neither would have been caught by a
+type-level test.
+
+
 ## 0.6.0
 
 ### Added

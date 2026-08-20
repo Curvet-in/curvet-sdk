@@ -6,6 +6,22 @@ export type JobStatus = "processing" | "completed" | "failed";
 export type MediaKind = "video" | "audio" | "3d";
 
 /**
+ * What a job cost, in USD. Present on a job read back from `jobs.retrieve()`,
+ * where `usage` is not — the credit reservation is settled against the job
+ * record rather than reported per response, so this is the only cost a poller
+ * ever sees.
+ */
+export interface JobCost {
+  /** Quoted up front and reserved against the balance. */
+  estimated?: number;
+  /** Settled once the job finished; equals `estimated` for flat-rate models. */
+  actual?: number;
+  /** Still held; the difference is released when the job settles. */
+  reserved?: number;
+  [key: string]: unknown;
+}
+
+/**
  * Unified media-job result. The raw API uses three different URL keys
  * (`videoUrl`/`audioUrl`/`modelUrl`) and a 200-vs-202 split; this normalizes
  * all of them to a single shape with `mediaUrl`.
@@ -19,7 +35,8 @@ export interface MediaJob {
   usage?: Usage;
   metadata?: Record<string, unknown>;
   error?: string | null;
-  cost?: unknown;
+  /** USD cost of the job. See {@link JobCost} — this, not `usage`, is what polling returns. */
+  cost?: JobCost;
   eta?: string;
   /** The raw, unnormalized response body. */
   raw: unknown;

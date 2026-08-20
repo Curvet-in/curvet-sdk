@@ -19,6 +19,40 @@ describe.skipIf(!KEY)("live integration (real gateway)", () => {
     expect(models.length).toBeGreaterThan(0);
   });
 
+  // The catalogue flags are what let a caller tell a TTS model from an ASR one.
+  // If the gateway ever stops sending them, `models.list({ capability })` starts
+  // silently returning the wrong models — so assert them against the real API.
+  it("model catalogue carries the capability flags", async () => {
+    const models = await curvet.models.list();
+    for (const m of models) {
+      expect(m.capability).toBeDefined();
+      expect(m.surface).toBe("api");
+      expect(m.available).toBe(true);
+    }
+    const asr = await curvet.models.list({ capability: "transcription" });
+    expect(asr.length).toBeGreaterThan(0);
+    expect(asr.every((m) => m.endpoint?.includes("/voice/stt"))).toBe(true);
+  });
+
+  it("include:'all' is a superset of the runnable catalogue", async () => {
+    const runnable = await curvet.models.list();
+    const all = await curvet.models.list({ include: "all" });
+    expect(all.length).toBeGreaterThanOrEqual(runnable.length);
+    expect(all.some((m) => m.comingSoon || m.surface !== "api")).toBe(true);
+  });
+
+  // AnalyticsResult drifted from the API once already: the SDK declared a flat
+  // shape while the gateway returned nested aggregates, and nothing caught it.
+  it("analytics returns the nested aggregate shape", async () => {
+    const a = await curvet.analytics.get();
+    expect(a.overview).toBeDefined();
+    expect(typeof a.overview?.totalRequests).toBe("number");
+    expect(Array.isArray(a.modelBreakdown)).toBe(true);
+    expect(Array.isArray(a.categoryBreakdown)).toBe(true);
+    expect(Array.isArray(a.statusBreakdown)).toBe(true);
+    expect(Array.isArray(a.errorBreakdown)).toBe(true);
+  });
+
   it("reads balance", async () => {
     const balance = await curvet.balance.get();
     expect(typeof balance.totalAvailableUSD).toBe("number");
