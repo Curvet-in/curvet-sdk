@@ -114,6 +114,38 @@ const balance = await curvet.balance.get();
 const analytics = await curvet.analytics.get({ startDate: "2026-01-01", endDate: "2026-02-01" });
 ```
 
+`models.list()` returns only what this key can actually call right now. Each
+entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface` and
+`pricing`, so you can tell what a model *does*, not just its modality.
+
+`capability` matters most for audio, where `type: "audio"` covers both
+directions. A `"transcription"` model takes a file on `voice.stt()`; passing one
+to `audio.generate()` fails:
+
+```ts
+const tts = await curvet.models.list({ type: "audio", capability: "generation" });
+const asr = await curvet.models.list({ capability: "transcription" });
+```
+
+To see what's coming as well as what runs today:
+
+```ts
+const everything = await curvet.models.list({ include: "all" });
+everything.filter((m) => m.comingSoon); // announced, not yet callable
+```
+
+`analytics.get()` returns an `overview` plus `modelBreakdown`,
+`categoryBreakdown`, `statusBreakdown` and `errorBreakdown` — per-model cost,
+request counts and mean latency:
+
+```ts
+const { overview, modelBreakdown } = await curvet.analytics.get();
+console.log(overview?.totalRequests, overview?.totalCost);
+for (const row of modelBreakdown ?? []) {
+  console.log(row._id, row.requestCount, row.totalCost, row.avgLatency);
+}
+```
+
 ### Workflows
 
 Find one without leaving your code — and learn what inputs it takes, rather than
@@ -165,6 +197,18 @@ const status = await curvet.workflows.runs.retrieve(runId);
 const dishes = await curvet.food.search("paneer", { limit: 5 });
 const stt = await curvet.voice.stt({ audio: audioBytes, filename: "clip.wav" });
 console.log(stt.text);
+```
+
+Name a `model` to choose the engine — the provider is derived from it, so any
+model with `capability: "transcription"` is enough:
+
+```ts
+const stt = await curvet.voice.stt({
+  audio: audioBytes,
+  filename: "clip.wav",
+  model: "whisper-large-v3",
+  languageCode: "en",
+});
 ```
 
 ### Enterprise (admin)

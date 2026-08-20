@@ -30,11 +30,16 @@ export { ThreeD } from "./resources/threeD";
 export { Jobs, Job } from "./resources/jobs";
 export type { JobDefaults } from "./resources/jobs";
 export { Models } from "./resources/models";
-export type { ModelsListOptions } from "./resources/models";
+export type { ModelsListOptions, ModelsInclude } from "./resources/models";
 export { Balance } from "./resources/balance";
 export type { BalanceInfo } from "./resources/balance";
 export { Analytics } from "./resources/analytics";
-export type { AnalyticsParams, AnalyticsResult } from "./resources/analytics";
+export type {
+  AnalyticsParams,
+  AnalyticsResult,
+  AnalyticsOverview,
+  AnalyticsBreakdownRow,
+} from "./resources/analytics";
 export { Workflows, WorkflowRuns } from "./resources/workflows";
 export type {
   WorkflowRunParams,
@@ -71,9 +76,19 @@ export type {
   JobStatus,
   MediaKind,
   MediaJob,
+  JobCost,
   VideoGenerateParams,
   AudioGenerateParams,
   ThreeDGenerateParams,
   PollOptions,
 } from "./types/job";
-export type { ModelType, ModelInfo, RateLimits, KnownModelId, ModelId } from "./types/models";
+export type {
+  ModelType,
+  ModelInfo,
+  ModelCapability,
+  ModelSurface,
+  ModelPricing,
+  RateLimits,
+  KnownModelId,
+  ModelId,
+} from "./types/models";

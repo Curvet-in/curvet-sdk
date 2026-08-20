@@ -1,14 +1,18 @@
 import type { HttpClient } from "../core/http";
 import type { RequestOptions } from "../types/common";
+import type { ModelId } from "../types/models";
 
 export interface SttParams {
   /** The audio to transcribe. */
   audio: Blob | Uint8Array | ArrayBuffer;
   /** File name for the upload (default "audio"). */
   filename?: string;
-  provider?: "elevenlabs" | "deepinfra" | (string & {});
-  /** ASR model id (provider-specific; optional). */
-  model?: string;
+  provider?: "elevenlabs" | "deepinfra" | "dashscope" | "gnani" | (string & {});
+  /**
+   * ASR model id. Any catalogue model with `capability: "transcription"` — the
+   * provider is derived from it, so naming a model is enough.
+   */
+  model?: ModelId;
   prompt?: string;
   /** ISO 639-1 language hint. */
   languageCode?: string;
@@ -18,6 +22,8 @@ export interface SttParams {
 export interface SttResult {
   success: boolean;
   text: string;
+  requestId?: string;
+  status?: string;
   languageCode?: string;
   segments?: Array<{ start: number; end: number; text: string }>;
   provider?: string;
