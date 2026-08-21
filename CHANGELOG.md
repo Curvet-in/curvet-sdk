@@ -5,6 +5,31 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0
+
+### Added
+
+- **`auth` — device-code authentication**, the credential path for everything a
+  session used to gate. `auth.deviceCode()` starts a login, `auth.pollForToken()`
+  waits for the human to approve while honouring the server's polling interval
+  (including a widened one after `slow_down`), and `auth.whoami()` reports who a
+  token belongs to and what it may do.
+  - `DeviceFlowPending` carries the RFC 8628 code, with `isPending` separating
+    "keep waiting" from "give up", so callers branch on state rather than
+    parsing a message.
+  - `auth.devices()` and `auth.logout({ all })` manage the tokens themselves.
+- **`apps` — app and key management.** `list`, `retrieve`, `create`, `update`,
+  `delete`, `rotateKeys`, `secret`. Requires a CLI token: an app key
+  authenticates an *app*, and letting one mint or rotate another would make
+  revoking it meaningless.
+- **`cliToken` client option** (or `CURVET_CLI_TOKEN`). It is also an alternative
+  to `enterpriseKey` for `enterprise.*` — the two reach the same routes by
+  different mounts, and the client picks the right one, preferring an explicit
+  enterprise key when both are present.
+- New types: `CliScope`, `DeviceCodeResult`, `DeviceTokenResult`, `CliDevice`,
+  `WhoAmI`, `DeveloperApp`, `CreateAppParams`, `UpdateAppParams`,
+  `AppRateLimits`, `RotatedKeys`.
+
 ## 0.8.0
 
 Published as 0.8.0, not 0.7.0: the 0.7.0 release was tagged but its publish

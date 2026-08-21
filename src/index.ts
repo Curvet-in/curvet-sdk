@@ -58,6 +58,24 @@ export { Food } from "./resources/food";
 export type { FoodItem } from "./resources/food";
 export { Voice } from "./resources/voice";
 export type { SttParams, SttResult } from "./resources/voice";
+export { CliAuth, DeviceFlowPending } from "./resources/cliAuth";
+export type {
+  CliScope,
+  DeviceCodeParams,
+  DeviceCodeResult,
+  DeviceTokenResult,
+  CliDevice,
+  WhoAmI,
+  PollOptions as DevicePollOptions,
+} from "./resources/cliAuth";
+export { Apps } from "./resources/apps";
+export type {
+  DeveloperApp,
+  CreateAppParams,
+  UpdateAppParams,
+  AppRateLimits,
+  RotatedKeys,
+} from "./resources/apps";
 export { Enterprise } from "./resources/enterprise";
 export type {
   EnterpriseRole,

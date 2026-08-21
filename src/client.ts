@@ -14,6 +14,8 @@ import { Workflows } from "./resources/workflows";
 import { Food } from "./resources/food";
 import { Voice } from "./resources/voice";
 import { Enterprise } from "./resources/enterprise";
+import { CliAuth } from "./resources/cliAuth";
+import { Apps } from "./resources/apps";
 
 export const DEFAULT_BASE_URL = "https://curvet.ai/api/v1/playground";
 
@@ -25,6 +27,12 @@ export interface CurvetOptions {
    * CURVET_ENTERPRISE_KEY env var. Required to use `curvet.enterprise.*`.
    */
   enterpriseKey?: string;
+  /**
+   * CLI token from `curvet login` (see `auth.deviceCode`). Falls back to the
+   * CURVET_CLI_TOKEN env var. Required to use `curvet.apps.*`, and an
+   * alternative to `enterpriseKey` for `curvet.enterprise.*`.
+   */
+  cliToken?: string;
   /** Override the playground base URL (defaults to production). */
   baseURL?: string;
   /** Per-request timeout in ms (default 60000). */
@@ -63,16 +71,22 @@ export class Curvet {
   readonly workflows: Workflows;
   readonly food: Food;
   readonly voice: Voice;
-  /** Enterprise admin API (requires an Enterprise API key). */
+  /** Enterprise admin API (requires an Enterprise API key, or `enterprise:admin`). */
   readonly enterprise: Enterprise;
+  /** `curvet login` — device-code authentication and its tokens. */
+  readonly auth: CliAuth;
+  /** App and key management (requires a CLI token). */
+  readonly apps: Apps;
 
   constructor(options: CurvetOptions = {}) {
     const appKey = options.appKey ?? envKey();
     const enterpriseKey = options.enterpriseKey ?? envEnterpriseKey();
-    if (!appKey && !enterpriseKey) {
+    const cliToken = options.cliToken ?? envCliToken();
+    if (!appKey && !enterpriseKey && !cliToken) {
       throw new CurvetError(
         "Missing credentials. Pass { appKey } (or CURVET_APP_KEY) for the playground, " +
-          "or { enterpriseKey } (or CURVET_ENTERPRISE_KEY) for the enterprise API.",
+          "{ enterpriseKey } (or CURVET_ENTERPRISE_KEY) for the enterprise API, " +
+          "or { cliToken } (or CURVET_CLI_TOKEN) for app and key management.",
       );
     }
     const fetchImpl = options.fetch ?? defaultFetch();
@@ -94,12 +108,36 @@ export class Curvet {
     // Playground/v1 resources authenticate with the app key.
     const client = new HttpClient({ ...shared, appKey: appKey ?? "", baseURL: playgroundBase });
     const v1Client = new HttpClient({ ...shared, appKey: appKey ?? "", baseURL: v1Base });
-    // Enterprise resources authenticate with the Enterprise API key.
+    // Enterprise resources authenticate with the Enterprise API key — or, when
+    // there isn't one, with a CLI token carrying `enterprise:admin`. The two
+    // reach the same router by different mounts, so the base URL differs.
+    const enterpriseViaCli = !enterpriseKey && !!cliToken;
     const enterpriseClient = new HttpClient({
       ...shared,
-      appKey: enterpriseKey ?? "",
-      authHeaderName: "x-enterprise-key",
-      baseURL: `${v1Base}/enterprise`,
+      appKey: (enterpriseViaCli ? cliToken : enterpriseKey) ?? "",
+      authHeaderName: enterpriseViaCli ? "x-cli-token" : "x-enterprise-key",
+      baseURL: enterpriseViaCli ? `${v1Base}/cli/enterprise` : `${v1Base}/enterprise`,
+    });
+
+    // App/key management, and the CLI token's own lifecycle.
+    const cliClient = new HttpClient({
+      ...shared,
+      appKey: cliToken ?? "",
+      authHeaderName: "x-cli-token",
+      baseURL: `${v1Base}/developer`,
+    });
+    // The device endpoints are unauthenticated: nothing is granted until a human
+    // approves, so there is no credential to send.
+    const deviceClient = new HttpClient({
+      ...shared,
+      appKey: "",
+      baseURL: v1Base,
+    });
+    const cliTokenClient = new HttpClient({
+      ...shared,
+      appKey: cliToken ?? "",
+      authHeaderName: "x-cli-token",
+      baseURL: v1Base,
     });
 
     const jobDefaults = {
@@ -120,6 +158,8 @@ export class Curvet {
     this.food = new Food(v1Client);
     this.voice = new Voice(v1Client);
     this.enterprise = new Enterprise(enterpriseClient);
+    this.auth = new CliAuth(deviceClient, cliTokenClient);
+    this.apps = new Apps(cliClient);
   }
 }
 
@@ -129,6 +169,10 @@ function envKey(): string | undefined {
 
 function envEnterpriseKey(): string | undefined {
   return typeof process !== "undefined" ? process.env?.CURVET_ENTERPRISE_KEY : undefined;
+}
+
+function envCliToken(): string | undefined {
+  return typeof process !== "undefined" ? process.env?.CURVET_CLI_TOKEN : undefined;
 }
 
 function defaultFetch(): FetchLike | undefined {
