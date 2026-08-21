@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Curvet, pauseFromEvent, type AgencyEvent } from "../src";
+import { Curvet, pauseFromEvent, clientToolCallFromEvent, type AgencyEvent } from "../src";
 import { mockFetch, type MockFetch } from "./helpers";
 import type { FetchResponse } from "../src/types/common";
 
@@ -170,6 +170,79 @@ describe("pauseFromEvent", () => {
     // Better to render nothing than to POST a resume that can never match.
     expect(pauseFromEvent({ type: "human_input", prompt: "?" })).toBeNull();
     expect(pauseFromEvent({ type: "plan_proposed", plan: "x" })).toBeNull();
+  });
+});
+
+describe("client-side tools", () => {
+  it("declares tools by name on the run", async () => {
+    const fetch = sseFetch([ev({ type: "run_end" })]);
+    const curvet = new Curvet({ cliToken: "t", fetch });
+    await collect(curvet.agency.run({ task: "read it", clientTools: ["read_file", "grep"] }));
+    expect(JSON.parse(fetch.calls[0].init.body).clientTools).toEqual(["read_file", "grep"]);
+  });
+
+  it("reads a call off the stream with its ACP kind and a title to show a person", () => {
+    const call = clientToolCallFromEvent({
+      type: "client_tool_call",
+      toolCallId: "toolu_01",
+      name: "read_file",
+      kind: "read",
+      title: "Read src/index.ts",
+      rawInput: { path: "src/index.ts" },
+      nodeId: "n1",
+    });
+    expect(call).not.toBeNull();
+    expect(call!.toolCallId).toBe("toolu_01");
+    expect(call!.kind).toBe("read");
+    expect(call!.title).toBe("Read src/index.ts");
+    expect(call!.rawInput).toEqual({ path: "src/index.ts" });
+  });
+
+  it("returns null for every other event", () => {
+    for (const type of ["agent_delta", "tool_call", "human_input", "run_end", "client_tool_result"]) {
+      expect(clientToolCallFromEvent({ type })).toBeNull();
+    }
+  });
+
+  it("returns null when there is nothing to answer with", () => {
+    // Better to render nothing than to POST a result that can never match a call.
+    expect(clientToolCallFromEvent({ type: "client_tool_call", name: "read_file" })).toBeNull();
+    expect(clientToolCallFromEvent({ type: "client_tool_call", toolCallId: "c1" })).toBeNull();
+  });
+
+  it("defaults an unknown kind to other rather than dropping the call", () => {
+    // A server that adds a tool kind this SDK predates must not make the call
+    // unanswerable — an unanswered call costs the run its timeout.
+    const call = clientToolCallFromEvent({ type: "client_tool_call", toolCallId: "c1", name: "future_tool" });
+    expect(call!.kind).toBe("other");
+  });
+
+  it("posts a result to the tool-result route, not to resume", async () => {
+    // Different routes because they have opposite failure policies: an unanswered
+    // resume auto-approves, an unanswered tool result must never become success.
+    const fetch = mockFetch(() => ({ status: 200, body: { ok: true, delivery: "published" } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+    const res = await curvet.agency.toolResult("run_1", { callId: "toolu_01", ok: true, content: "hi" });
+    expect(res.delivery).toBe("published");
+    expect(fetch.calls[0].url).toBe("https://curvet.ai/api/v1/cli/agency/run/run_1/tool-result");
+    const body = JSON.parse(fetch.calls[0].init.body);
+    expect(body).toMatchObject({ callId: "toolu_01", ok: true, content: "hi", truncated: false });
+  });
+
+  it("sends a refusal as a failure with a reason the model can act on", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { ok: true } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+    await curvet.agency.toolResult("run_1", { callId: "c1", ok: false, error: "denied: secret file" });
+    const body = JSON.parse(fetch.calls[0].init.body);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("denied: secret file");
+  });
+
+  it("carries the truncation flag through", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { ok: true } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+    await curvet.agency.toolResult("run_1", { callId: "c1", ok: true, content: "head", truncated: true });
+    expect(JSON.parse(fetch.calls[0].init.body).truncated).toBe(true);
   });
 });
 
