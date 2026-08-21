@@ -68,6 +68,19 @@ export type {
   WhoAmI,
   PollOptions as DevicePollOptions,
 } from "./resources/cliAuth";
+export { Agency, pauseFromEvent } from "./resources/agency";
+export type {
+  AgencyEvent,
+  AgencyEventType,
+  AgencyPause,
+  AgencyDeliverable,
+  AgencyRunParams,
+  AgencyResumeParams,
+  AgencyResumeResult,
+  AgencyRunSummary,
+  AgencyRunDetail,
+  AgencyDecision,
+} from "./resources/agency";
 export { Apps } from "./resources/apps";
 export type {
   DeveloperApp,

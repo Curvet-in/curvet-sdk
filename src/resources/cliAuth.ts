@@ -2,7 +2,13 @@ import type { HttpClient } from "../core/http";
 import type { RequestOptions } from "../types/common";
 
 /** What a CLI token may do. See documentation/CLI_DEVICE_LOGIN.md. */
-export type CliScope = "apps:read" | "apps:write" | "apps:keys" | "enterprise:admin";
+export type CliScope =
+  | "apps:read"
+  | "apps:write"
+  | "apps:keys"
+  /** Start agent runs. Not granted by default — ask for it with `--scope agency:run`. */
+  | "agency:run"
+  | "enterprise:admin";
 
 export interface DeviceCodeParams {
   /** Shown on the approval page so the human recognises their own machine. */
