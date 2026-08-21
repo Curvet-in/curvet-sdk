@@ -46,7 +46,11 @@ export type AgencyEventType =
   | "ephemeral"
   | "text"
   | "error"
-  | "run_end";
+  | "run_end"
+  /** The run wants a tool executed on THIS machine. See ClientToolCall. */
+  | "client_tool_call"
+  /** How that call ended, including whether the result ever reached the run. */
+  | "client_tool_result";
 
 export interface AgencyEvent {
   type: AgencyEventType | string;
@@ -147,6 +151,72 @@ export function pauseFromEvent(e: AgencyEvent): AgencyPause | null {
   return null;
 }
 
+// ---- client-side tools -----------------------------------------------------
+
+/**
+ * What a tool call DOES, so a client can render and gate it by category rather
+ * than by matching on every name it might ever see. These are the tool kinds
+ * from the Agent Client Protocol (`@agentclientprotocol/sdk`).
+ */
+export type ClientToolKind = "read" | "search" | "edit" | "delete" | "move" | "execute" | "fetch" | "think" | "other";
+
+/**
+ * The run has asked this machine to execute a tool, and is now SUSPENDED waiting
+ * for the answer. Execute it, then call `toolResult()` with the same `toolCallId`.
+ *
+ * If you do not answer, the run does not proceed on a guess: the tool fails and
+ * the model is told plainly that nothing was read. That is deliberate — a model
+ * told a file was read when it was not will reason, edit and report against
+ * contents that never existed. It also means a slow answer costs the run, so
+ * answer even when the answer is a refusal.
+ */
+export interface ClientToolCall {
+  /** Pass this back as `callId`. */
+  toolCallId: string;
+  name: string;
+  kind: ClientToolKind;
+  /** One line describing the call, ready to show a person: "Read src/index.ts". */
+  title: string;
+  /** The tool's arguments, exactly as the model produced them. Validate before use. */
+  rawInput: Record<string, unknown>;
+  nodeId?: string;
+  raw: AgencyEvent;
+}
+
+/** Read a `client_tool_call` off the stream, or null if this is any other event. */
+export function clientToolCallFromEvent(e: AgencyEvent): ClientToolCall | null {
+  if (e.type !== "client_tool_call") return null;
+  const toolCallId = String(e.toolCallId ?? e.callId ?? "");
+  const name = String(e.name ?? e.tool ?? "");
+  if (!toolCallId || !name) return null;
+  return {
+    toolCallId,
+    name,
+    kind: (e.kind as ClientToolKind) ?? "other",
+    title: String(e.title ?? name),
+    rawInput: (e.rawInput ?? e.input ?? {}) as Record<string, unknown>,
+    nodeId: e.nodeId,
+    raw: e,
+  };
+}
+
+/** What a client executed, or why it did not. */
+export interface ClientToolResultParams {
+  /** The `toolCallId` from the call being answered. */
+  callId: string;
+  ok: boolean;
+  /** The tool's output. Ignored when `ok` is false. */
+  content?: string;
+  /** Why it failed — shown to the model, so say something it can act on. */
+  error?: string;
+  /**
+   * Whether `content` was cut short. Declare it: a silently truncated file read
+   * produces confident wrong edits, and the model will narrow its request
+   * instead of retrying the same one if it knows.
+   */
+  truncated?: boolean;
+}
+
 // ---- params ----------------------------------------------------------------
 
 export interface AgencyRunParams {
@@ -160,6 +230,19 @@ export interface AgencyRunParams {
   history?: { role: "user" | "assistant"; content: string }[];
   /** Groups follow-up turns into one conversation. */
   sessionId?: string;
+  /**
+   * Tools this client can execute on the user's machine, BY NAME — for example
+   * `["read_file", "list_dir", "grep"]`.
+   *
+   * Names only: the server owns the schemas and descriptions, so a client can
+   * neither shadow a server-side tool nor write its own text into the model's
+   * context. Names the server does not know are dropped, so declaring a tool a
+   * newer client supports costs that one tool rather than the whole run.
+   *
+   * Declaring a tool is a promise to execute it. The run suspends on every call
+   * and fails the tool if nobody answers.
+   */
+  clientTools?: string[];
   signal?: AbortSignal;
 }
 
@@ -316,6 +399,48 @@ export class Agency {
       method: "POST",
       path: `/run/${encodeURIComponent(runId)}/resume`,
       body: { abort: true },
+      options,
+    });
+  }
+
+  /**
+   * Answer a `client_tool_call` — the result of running one of this client's
+   * tools on the user's machine.
+   *
+   * ```ts
+   * const call = clientToolCallFromEvent(event);
+   * if (call) {
+   *   const out = await runLocally(call);           // your executor
+   *   await curvet.agency.toolResult(runId, { callId: call.toolCallId, ...out });
+   * }
+   * ```
+   *
+   * Answer even when the answer is no. `{ok: false, error: "..."}` lets the model
+   * adapt — try another path, ask the user — where silence just costs the run its
+   * timeout and tells it nothing it can act on.
+   *
+   * `delivery` reports how far the server can vouch for this: `"resolved"` means a
+   * waiting call received it, `"published"` means it was handed to the run queue
+   * without the server learning whether anything was still waiting. Production
+   * runs queued, so `"published"` is the normal answer. Either way the run's own
+   * timeout is what makes an undelivered result safe — it fails the tool rather
+   * than inventing an answer.
+   */
+  async toolResult(
+    runId: string,
+    params: ClientToolResultParams,
+    options?: RequestOptions,
+  ): Promise<AgencyResumeResult> {
+    return this.client.request<AgencyResumeResult>({
+      method: "POST",
+      path: `/run/${encodeURIComponent(runId)}/tool-result`,
+      body: {
+        callId: params.callId,
+        ok: params.ok === true,
+        content: params.content ?? "",
+        error: params.error,
+        truncated: params.truncated === true,
+      },
       options,
     });
   }
