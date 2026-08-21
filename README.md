@@ -211,6 +211,40 @@ const stt = await curvet.voice.stt({
 });
 ```
 
+### Signing in (`curvet login`)
+
+App and key management needs a **CLI token**, not an app key — an app key
+authenticates an *app*, and letting one mint or rotate another would make
+revoking it meaningless.
+
+```ts
+const curvet = new Curvet({ cliToken: "pending" }); // the device call needs no credential
+const start = await curvet.auth.deviceCode({ deviceName: "my-laptop" });
+console.log(`Open ${start.verificationUriComplete} and enter ${start.userCode}`);
+
+const { token, scopes } = await curvet.auth.pollForToken(start);
+// `token` is shown once — store it. Then:
+const signedIn = new Curvet({ cliToken: token });
+const apps = await signedIn.apps.list();
+```
+
+`pollForToken` honours the server's interval, including when it widens it. To
+branch on the flow's state rather than a message, catch `DeviceFlowPending`:
+`isPending` is true for `authorization_pending` and `slow_down`, false for
+`access_denied` and `expired_token`.
+
+```ts
+const app = await signedIn.apps.create({
+  name: "Nightly Digest",
+  allowedModels: ["gpt-4o-mini"],
+  rateLimits: { requestsPerHour: 250, costCapPerDay: 5 },
+});
+const { appKey, appSecret } = await signedIn.apps.rotateKeys(app._id);
+```
+
+A CLI token carrying `enterprise:admin` also drives `enterprise.*`, so an org
+admin needs no separate enterprise key.
+
 ### Enterprise (admin)
 
 For enterprise customers: manage your organization with an **enterprise key** — invite members, set per-member credit allotments funded from your org pool, and read your dashboard. Requires `enterpriseKey` (org-scoped; sent as `x-enterprise-key`).
