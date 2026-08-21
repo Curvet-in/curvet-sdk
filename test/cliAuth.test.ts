@@ -168,3 +168,31 @@ describe("credentials", () => {
     expect(fetch.calls[0].url).toContain("/api/v1/enterprise/members");
   });
 });
+
+// A 429 mid-login is not a failure. The user may be seconds from clicking
+// Authorise; dropping the code because we polled too eagerly loses their login.
+describe("rate limiting during a login", () => {
+  it("backs off and keeps waiting instead of abandoning the code", async () => {
+    let n = 0;
+    const fetch = mockFetch(() => {
+      n++;
+      if (n === 1) return { status: 429, body: { error: "slow_down" } };
+      return {
+        status: 200,
+        body: { token: "cvt_cli_ok", tokenId: "1", scopes: [], expiresAt: "", reusedDevice: false, defaultApp: null },
+      };
+    });
+    const curvet = new Curvet({ cliToken: "x", fetch });
+    const result = await curvet.auth.pollForToken(
+      { deviceCode: "dc", interval: 0, expiresIn: 600 },
+      {},
+      { timeoutMs: 60_000 },
+    );
+    expect(result.token).toBe("cvt_cli_ok");
+    expect(n).toBe(2);
+  }, 60_000);
+
+  it("treats a 429 as pending, not terminal", () => {
+    expect(new DeviceFlowPending("rate_limited", "").isPending).toBe(true);
+  });
+});

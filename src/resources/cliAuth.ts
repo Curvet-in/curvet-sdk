@@ -66,9 +66,20 @@ export class DeviceFlowPending extends Error {
     this.code = code;
     this.interval = interval;
   }
-  /** Whether polling should continue. */
+  /**
+   * Whether polling should continue.
+   *
+   * `rate_limited` counts as pending: a login that is mid-flight should back off
+   * and keep waiting, not abandon a code the user is about to approve. The
+   * server tells us how fast to go via `interval`; being told "too fast" is a
+   * reason to slow down, not to give up.
+   */
   get isPending(): boolean {
-    return this.code === "authorization_pending" || this.code === "slow_down";
+    return (
+      this.code === "authorization_pending" ||
+      this.code === "slow_down" ||
+      this.code === "rate_limited"
+    );
   }
 }
 
@@ -209,7 +220,15 @@ export class CliAuth {
  * are not failures. Surface the code rather than the HTTP status.
  */
 function asDeviceFlowError(err: unknown): unknown {
+  const status = (err as { status?: number })?.status;
   const body = (err as { raw?: Record<string, unknown> })?.raw;
+
+  // A 429 mid-login is not a failure, it is a "wait longer". Back off hard
+  // rather than dropping a code the user may be seconds from approving.
+  if (status === 429) {
+    return new DeviceFlowPending("rate_limited", "Polling too fast; backing off.", 30);
+  }
+
   const code = typeof body?.error === "string" ? body.error : undefined;
   if (!code) return err;
   return new DeviceFlowPending(
