@@ -24,6 +24,13 @@ export interface FetchResponse {
   status: number;
   headers: { get(name: string): string | null };
   text(): Promise<string>;
+  /**
+   * The raw body, for the streaming surfaces (agency runs). Optional so an
+   * injected non-streaming fetch — a test double, an older polyfill — still
+   * satisfies this type; the streaming code checks for it and errors clearly
+   * rather than assuming it is there.
+   */
+  body?: ReadableStream<Uint8Array> | null;
 }
 
 /** Minimal structural type for fetch init options. */

@@ -16,6 +16,7 @@ import { Voice } from "./resources/voice";
 import { Enterprise } from "./resources/enterprise";
 import { CliAuth } from "./resources/cliAuth";
 import { Apps } from "./resources/apps";
+import { Agency } from "./resources/agency";
 
 export const DEFAULT_BASE_URL = "https://curvet.ai/api/v1/playground";
 
@@ -77,6 +78,11 @@ export class Curvet {
   readonly auth: CliAuth;
   /** App and key management (requires a CLI token). */
   readonly apps: Apps;
+  /**
+   * Agency 2 runs. Needs a CLI token carrying `agency:run`, which `curvet login`
+   * does not request by default.
+   */
+  readonly agency: Agency;
 
   constructor(options: CurvetOptions = {}) {
     const appKey = options.appKey ?? envKey();
@@ -160,6 +166,14 @@ export class Curvet {
     this.enterprise = new Enterprise(enterpriseClient);
     this.auth = new CliAuth(deviceClient, cliTokenClient);
     this.apps = new Apps(cliClient);
+    // Agency has its own mount (allowOnly-contained, see routes/api/cliAgency.js).
+    // `run` streams SSE rather than returning JSON, so it needs the raw fetch and
+    // credential alongside the ordinary JSON client the other calls use.
+    const agencyBase = `${v1Base}/cli/agency`;
+    this.agency = new Agency(
+      new HttpClient({ ...shared, appKey: cliToken ?? "", authHeaderName: "x-cli-token", baseURL: agencyBase }),
+      { baseURL: agencyBase, appKey: cliToken ?? "", authHeaderName: "x-cli-token", fetch: fetchImpl },
+    );
   }
 }
 
