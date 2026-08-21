@@ -164,10 +164,14 @@ export class CliAuth {
 
     for (;;) {
       if (options.signal?.aborted) throw new DeviceFlowPending("aborted", "Login cancelled");
-      if (Date.now() >= deadline) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
         throw new DeviceFlowPending("expired_token", "The login request expired before it was approved.");
       }
-      await sleep(interval * 1000, options.signal);
+      // Never sleep past our own deadline. A rate-limit backoff can be far
+      // longer than the time left, and a caller who asked to give up after 30
+      // seconds should not be held for another 30 waiting out an interval.
+      await sleep(Math.min(interval * 1000, remaining), options.signal);
       options.onPoll?.(Date.now() - startedAt);
 
       try {
@@ -219,14 +223,33 @@ export class CliAuth {
  * The device endpoints answer 400 with an RFC 8628 error code for states that
  * are not failures. Surface the code rather than the HTTP status.
  */
-function asDeviceFlowError(err: unknown): unknown {
+/** Used only when the server rate-limits without saying for how long. */
+const RATE_LIMIT_BACKOFF_S = 30;
+
+function numeric(value: unknown): number | undefined {
+  const n = typeof value === "string" ? Number(value) : value;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function asDeviceFlowError(
+  err: unknown,
+  headers?: (name: string) => string | null,
+): unknown {
   const status = (err as { status?: number })?.status;
   const body = (err as { raw?: Record<string, unknown> })?.raw;
 
-  // A 429 mid-login is not a failure, it is a "wait longer". Back off hard
-  // rather than dropping a code the user may be seconds from approving.
+  // A 429 mid-login is not a failure, it is a "wait longer". Back off rather
+  // than dropping a code the user may be seconds from approving -- and back off
+  // by however long the server actually asked for, rather than a number of our
+  // own invention. `Retry-After` is the standard way to say it; some proxies put
+  // it in the body instead.
   if (status === 429) {
-    return new DeviceFlowPending("rate_limited", "Polling too fast; backing off.", 30);
+    const seconds =
+      numeric(body?.interval) ??
+      numeric(body?.retry_after) ??
+      numeric(headers?.("retry-after")) ??
+      RATE_LIMIT_BACKOFF_S;
+    return new DeviceFlowPending("rate_limited", "Polling too fast; backing off.", seconds);
   }
 
   const code = typeof body?.error === "string" ? body.error : undefined;

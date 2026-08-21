@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { Curvet, DeviceFlowPending } from "../src";
 import { mockFetch } from "./helpers";
 
@@ -26,7 +26,24 @@ describe("auth.deviceCode", () => {
   });
 });
 
+/**
+ * The poll sleeps between attempts, so with a real clock these tests spend most
+ * of their time doing nothing — and become timing-flaky besides. Fake timers let
+ * the loop run at full speed while still exercising the real intervals: what is
+ * asserted is that it waited the right *amount*, not that we sat through it.
+ */
+async function runPoll<T>(promise: Promise<T>, virtualMs = 120_000): Promise<T> {
+  const advancing = vi.advanceTimersByTimeAsync(virtualMs);
+  const result = await promise;
+  await advancing;
+  return result;
+}
+
 describe("auth.pollForToken", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps polling while the human has not answered, then returns the token", async () => {
     let n = 0;
     const fetch = mockFetch(() => {
@@ -44,8 +61,9 @@ describe("auth.pollForToken", () => {
         },
       };
     });
+    vi.useFakeTimers();
     const curvet = new Curvet({ cliToken: "x", fetch });
-    const result = await curvet.auth.pollForToken(START);
+    const result = await runPoll(curvet.auth.pollForToken(START));
     expect(result.token).toBe("cvt_cli_abc");
     expect(n).toBe(3);
   });
@@ -63,28 +81,33 @@ describe("auth.pollForToken", () => {
         body: { token: "t", tokenId: "1", scopes: [], expiresAt: "", reusedDevice: false, defaultApp: null },
       };
     });
+    vi.useFakeTimers();
     const curvet = new Curvet({ cliToken: "x", fetch });
     const started = Date.now();
-    await curvet.auth.pollForToken({ ...START, interval: 0 }, {}, {
-      onPoll: () => intervals.push(Date.now() - started),
-    });
+    await runPoll(
+      curvet.auth.pollForToken({ ...START, interval: 0 }, {}, {
+        onPoll: () => intervals.push(Date.now() - started),
+      }),
+    );
     expect(n).toBe(2);
-    // First poll at ~1s (floored), second only after the widened 2s.
+    // First poll at ~1s (the floor), the second only after the widened 2s.
     expect(intervals[1] - intervals[0]).toBeGreaterThanOrEqual(1900);
-  }, 20_000);
+  });
 
   it("stops on a denial rather than polling forever", async () => {
     const fetch = mockFetch(() => ({ status: 400, body: { error: "access_denied" } }));
+    vi.useFakeTimers();
     const curvet = new Curvet({ cliToken: "x", fetch });
-    await expect(curvet.auth.pollForToken(START)).rejects.toMatchObject({
+    await expect(runPoll(curvet.auth.pollForToken(START))).rejects.toMatchObject({
       code: "access_denied",
     });
   });
 
   it("stops when the code expires", async () => {
     const fetch = mockFetch(() => ({ status: 400, body: { error: "expired_token" } }));
+    vi.useFakeTimers();
     const curvet = new Curvet({ cliToken: "x", fetch });
-    await expect(curvet.auth.pollForToken(START)).rejects.toMatchObject({
+    await expect(runPoll(curvet.auth.pollForToken(START))).rejects.toMatchObject({
       code: "expired_token",
     });
   });
@@ -172,25 +195,47 @@ describe("credentials", () => {
 // A 429 mid-login is not a failure. The user may be seconds from clicking
 // Authorise; dropping the code because we polled too eagerly loses their login.
 describe("rate limiting during a login", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("backs off and keeps waiting instead of abandoning the code", async () => {
     let n = 0;
+    // The server says how long to wait; the client obeys it rather than
+    // inventing a number. That is what keeps this test fast — and, in
+    // production, what keeps a client from ignoring a Retry-After.
     const fetch = mockFetch(() => {
       n++;
-      if (n === 1) return { status: 429, body: { error: "slow_down" } };
+      if (n === 1) return { status: 429, body: { error: "slow_down", interval: 1 } };
       return {
         status: 200,
         body: { token: "cvt_cli_ok", tokenId: "1", scopes: [], expiresAt: "", reusedDevice: false, defaultApp: null },
       };
     });
+    vi.useFakeTimers();
     const curvet = new Curvet({ cliToken: "x", fetch });
-    const result = await curvet.auth.pollForToken(
-      { deviceCode: "dc", interval: 0, expiresIn: 600 },
-      {},
-      { timeoutMs: 60_000 },
+    const result = await runPoll(
+      curvet.auth.pollForToken({ deviceCode: "dc", interval: 0, expiresIn: 600 }, {}, {
+        timeoutMs: 30_000,
+      }),
     );
     expect(result.token).toBe("cvt_cli_ok");
     expect(n).toBe(2);
-  }, 60_000);
+  });
+
+  it("falls back to a fixed backoff when the server says nothing", async () => {
+    const fetch = mockFetch(() => ({ status: 429, body: {} }));
+    vi.useFakeTimers();
+    const curvet = new Curvet({ cliToken: "x", fetch });
+    // The 30s default backoff must not outlive a 1.5s deadline.
+    await expect(
+      runPoll(
+        curvet.auth.pollForToken({ deviceCode: "dc", interval: 0, expiresIn: 600 }, {}, {
+          timeoutMs: 1500,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "expired_token" });
+  });
 
   it("treats a 429 as pending, not terminal", () => {
     expect(new DeviceFlowPending("rate_limited", "").isPending).toBe(true);
