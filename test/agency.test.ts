@@ -137,6 +137,98 @@ describe("agency.run", () => {
   });
 });
 
+describe("attachments", () => {
+  it("carries attachments through to the run body", async () => {
+    const fetch = sseFetch([ev({ type: "run_end" })]);
+    const curvet = new Curvet({ cliToken: "t", fetch });
+    await collect(
+      curvet.agency.run({
+        task: "what is the total?",
+        attachments: [{ id: "f_1", name: "invoice.pdf" }, { name: "notes.txt", content: "hello" }],
+      }),
+    );
+    expect(JSON.parse(fetch.calls[0].init.body).attachments).toEqual([
+      { id: "f_1", name: "invoice.pdf" },
+      { name: "notes.txt", content: "hello" },
+    ]);
+  });
+
+  it("uploads a file as multipart and returns its parked id", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: { id: "f_9", name: "invoice.pdf", type: "application/pdf", size: 4 } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+
+    const parked = await curvet.agency.attach({
+      data: new Uint8Array([1, 2, 3, 4]),
+      name: "invoice.pdf",
+      sessionId: "s_1",
+    });
+    expect(parked.id).toBe("f_9");
+
+    const { url, init } = fetch.calls[0];
+    expect(url).toContain("/attach");
+    expect(init.method).toBe("POST");
+    // Multipart, and specifically NOT base64 JSON: a 50MB file inlined as base64
+    // costs ~200MB of server memory to parse and exceeds the global json limit.
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    const file = form.get("file") as File;
+    expect(file).toBeTruthy();
+    expect(file.size).toBe(4);
+    // The field name is the server's contract (multer `.single("file")`), and the
+    // filename is what the server classifies the file by.
+    expect(file.name).toBe("invoice.pdf");
+    expect(form.get("sessionId")).toBe("s_1");
+    // No hand-set content-type: the boundary has to come from fetch.
+    const headers = init.headers as Record<string, string>;
+    expect(Object.keys(headers).find((h) => h.toLowerCase() === "content-type")).toBeUndefined();
+  });
+
+  it("infers the media type from the extension, and only for types the server knows", async () => {
+    // A confidently wrong MIME type is worse than none — an unknown type falls back
+    // to the extension server-side and still works, a wrong one routes a PDF down
+    // the image path.
+    const fetch = mockFetch(() => ({ status: 200, body: { id: "f", name: "n", type: "t", size: 1 } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+
+    await curvet.agency.attach({ data: new Uint8Array([1]), name: "photo.JPEG" });
+    expect(((fetch.calls[0].init.body as FormData).get("file") as File).type).toBe("image/jpeg");
+
+    await curvet.agency.attach({ data: new Uint8Array([1]), name: "model.blend" });
+    expect(((fetch.calls[1].init.body as FormData).get("file") as File).type).toBe("");
+
+    await curvet.agency.attach({ data: new Uint8Array([1]), name: "x.png", type: "application/pdf" });
+    expect(((fetch.calls[2].init.body as FormData).get("file") as File).type).toBe("application/pdf");
+  });
+
+  it("uploads only the bytes of a pooled Buffer view", async () => {
+    // A Node Buffer is very often a window onto a larger shared pool. Passing
+    // `view.buffer` straight to Blob uploads the whole pool — other files' bytes
+    // included — and the size is silently wrong.
+    const pool = new Uint8Array([9, 9, 9, 1, 2, 3, 9, 9]);
+    const view = pool.subarray(3, 6);
+    const fetch = mockFetch(() => ({ status: 200, body: { id: "f", name: "n", type: "t", size: 3 } }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+
+    await curvet.agency.attach({ data: view, name: "three.bin" });
+    const file = (fetch.calls[0].init.body as FormData).get("file") as File;
+    expect(file.size).toBe(3);
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("refuses locally what the server would refuse anyway", async () => {
+    const fetch = mockFetch(() => ({ status: 200, body: {} }));
+    const curvet = new Curvet({ cliToken: "t", fetch });
+
+    await expect(curvet.agency.attach({ data: new Uint8Array([1]), name: "  " })).rejects.toThrow(/file name/);
+    await expect(curvet.agency.attach({ data: new Uint8Array(), name: "empty.pdf" })).rejects.toThrow(/no bytes/);
+    // Failing after uploading 50MB to be told no is a minute of the user's life.
+    await expect(
+      curvet.agency.attach({ data: new Uint8Array(51 * 1024 * 1024), name: "huge.pdf" }),
+    ).rejects.toThrow(/over the 50MB limit/);
+    expect(fetch.calls.length).toBe(0);
+  });
+});
+
 describe("pauseFromEvent", () => {
   it("keys an ask_user pause on nodeId, not callId", async () => {
     // The trap. ask_user registers its waiter under nodeId while every other pause
