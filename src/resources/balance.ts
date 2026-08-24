@@ -6,7 +6,18 @@ export interface BalanceInfo {
   totalAvailableUSD: number;
   totalPoints?: number;
   breakdown?: {
+    /**
+     * The wallet the spend comes out of. On a shared-org plan this is the
+     * ORGANISATION's pool, not the user's own money — see `personalCredits`,
+     * which is what "yours" means. Naming these apart matters: a client that
+     * shows `walletCredits` under a label like "personal" reports a company
+     * balance as an individual one.
+     */
     walletCredits?: number;
+    /** The member's OWN paid balance. Zero is normal on a shared plan. */
+    personalCredits?: number;
+    /** Of that, what they are actually allowed to spend (config-dependent). */
+    personalSpendable?: number;
     totalCredits?: number;
     organizationLimit?: number;
     monthlyUsed?: number;
