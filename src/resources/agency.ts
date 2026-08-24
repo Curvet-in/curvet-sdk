@@ -219,6 +219,57 @@ export interface ClientToolResultParams {
 
 // ---- params ----------------------------------------------------------------
 
+/**
+ * A file handed to a run.
+ *
+ * Two forms, and they are not interchangeable:
+ *
+ *   • `id`      — a parked upload from `attach()`. The bytes stay on the server
+ *                 and how they reach the model is decided at RUN time, against
+ *                 the model actually chosen. An Anthropic orchestrator gets the
+ *                 real document as a content block and sees layout, tables and
+ *                 charts; anything else falls back to extracted text.
+ *   • `content` — text you have already extracted yourself. Simpler, and lossy
+ *                 in exactly the way the parked path exists to avoid: the model
+ *                 reads your transcription instead of the page.
+ *
+ * Prefer `id` for anything that is not already text. A PDF, an image or a
+ * spreadsheet pasted in as `content` is a transcription, and a photo cannot be
+ * one at all.
+ */
+export interface AgencyAttachment {
+  /** The name the model sees. Extensions matter — the server classifies on them. */
+  name: string;
+  /** Parked-upload id from `attach()`. */
+  id?: string;
+  /** Already-extracted text, as an alternative to `id`. */
+  content?: string;
+}
+
+/** What `attach()` hands back. Pass `{ id, name }` to `run()`. */
+export interface AgencyParkedFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
+export interface AgencyAttachParams {
+  /** The bytes. A Node `Buffer` is a `Uint8Array`, so it works as-is. */
+  data: Uint8Array | ArrayBuffer | Blob;
+  /** File name, with its extension — see AgencyAttachment.name. */
+  name: string;
+  /** MIME type. Inferred from the extension when omitted. */
+  type?: string;
+  /**
+   * Groups the file with a conversation so later turns can re-read it. Use the
+   * same `sessionId` you pass to `run()`; without one the file is an orphan and
+   * is swept after a day.
+   */
+  sessionId?: string;
+  signal?: AbortSignal;
+}
+
 export interface AgencyRunParams {
   /** What to do. This is the user's request, verbatim. */
   task: string;
@@ -243,6 +294,15 @@ export interface AgencyRunParams {
    * and fails the tool if nobody answers.
    */
   clientTools?: string[];
+  /**
+   * Files this run may read — at most 5, and see `AgencyAttachment` for which of
+   * its two forms to use.
+   *
+   * Bounded server-side rather than here: extra files past the fifth are dropped
+   * and inlined `content` is cut at 100KB each, silently, so send what you mean
+   * to send.
+   */
+  attachments?: AgencyAttachment[];
   signal?: AbortSignal;
 }
 
@@ -293,6 +353,54 @@ export interface AgencyRunSummary {
 export interface AgencyRunDetail extends AgencyRunSummary {
   events?: AgencyEvent[];
   deliverables?: AgencyDeliverable[];
+}
+
+// ---- attachments ------------------------------------------------------------
+
+/** Matches the server's multer limit; see AgencyAttachParams. */
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Only the types the server actually classifies, and nothing else.
+ *
+ * A wrong guess is worse than none: an unknown type falls back to the file
+ * extension server-side and still works, whereas a confidently wrong MIME type
+ * routes a PDF down the image path. So this maps what agency/attachmentExtract
+ * recognises and leaves everything else to the extension.
+ */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12",
+  xltx: "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+  csv: "text/csv",
+  txt: "text/plain",
+  md: "text/markdown",
+  json: "application/json",
+};
+
+function guessMimeType(name: string): string | undefined {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return MIME_BY_EXT[ext];
+}
+
+function toBlob(data: AgencyAttachParams["data"], type?: string): Blob {
+  if (typeof Blob !== "undefined" && data instanceof Blob) return data;
+  if (data instanceof ArrayBuffer) return new Blob([data], type ? { type } : undefined);
+  if (ArrayBuffer.isView(data)) {
+    // Respect the view's window. A Node Buffer is very often a slice of a larger
+    // pooled ArrayBuffer, so handing the whole buffer over uploads the pool.
+    const view = data as Uint8Array;
+    const copy = new Uint8Array(view.byteLength);
+    copy.set(view);
+    return new Blob([copy], type ? { type } : undefined);
+  }
+  throw new CurvetError("agency.attach needs the file's bytes as a Uint8Array, ArrayBuffer or Blob.");
 }
 
 // ---- resource --------------------------------------------------------------
@@ -442,6 +550,64 @@ export class Agency {
         truncated: params.truncated === true,
       },
       options,
+    });
+  }
+
+  /**
+   * Park a file so a run can refer to it, and get back an id for
+   * `run({ attachments })`.
+   *
+   * Returns as soon as the bytes are stored — durable storage and any text
+   * extraction happen behind the response, so a scanned PDF does not make you
+   * wait minutes before you can ask about it.
+   *
+   * ```ts
+   * const file = await curvet.agency.attach({
+   *   data: await fs.readFile("invoice.pdf"),
+   *   name: "invoice.pdf",
+   *   sessionId,
+   * });
+   * for await (const e of curvet.agency.run({
+   *   task: "what is the total?",
+   *   attachments: [{ id: file.id, name: file.name }],
+   *   sessionId,
+   * })) { ... }
+   * ```
+   *
+   * A parked file lives for about an hour in the hot store and for the life of
+   * the conversation in durable storage. Re-attach rather than assuming an id
+   * from a previous session still resolves.
+   */
+  async attach(params: AgencyAttachParams, options?: RequestOptions): Promise<AgencyParkedFile> {
+    const name = String(params.name ?? "").trim();
+    if (!name) {
+      // The name is not cosmetic: the server classifies PDFs, images and
+      // spreadsheets by extension, so an unnamed file is an unreadable one.
+      throw new CurvetError("agency.attach needs a file name, with its extension.");
+    }
+
+    const blob = toBlob(params.data, params.type ?? guessMimeType(name));
+    if (blob.size === 0) {
+      throw new CurvetError(`agency.attach was given no bytes for "${name}".`);
+    }
+    if (blob.size > MAX_ATTACHMENT_BYTES) {
+      // Checked here as well as on the server so an oversized file fails in a
+      // moment rather than after uploading 50MB to be told no.
+      throw new CurvetError(
+        `"${name}" is ${Math.round(blob.size / 1024 / 1024)}MB, over the ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB limit.`,
+      );
+    }
+
+    const form = new FormData();
+    // The field name is the server's contract (multer `.single("file")`).
+    form.append("file", blob, name);
+    if (params.sessionId) form.append("sessionId", params.sessionId);
+
+    return this.client.request<AgencyParkedFile>({
+      method: "POST",
+      path: "/attach",
+      body: form,
+      options: { ...options, signal: params.signal ?? options?.signal },
     });
   }
 
