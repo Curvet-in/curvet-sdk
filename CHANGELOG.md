@@ -1,5 +1,10 @@
 # Changelog
 
+All notable changes to `@curvet/sdk` are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## 0.13.0
 
 - `agency` now addresses the server with whichever credential the client holds:
@@ -12,11 +17,6 @@
   toggle. A CLI token wins when both are present — it identifies the person who
   signed in, while an app key may be shared by everyone using the app it ships
   inside.
-
-All notable changes to `@curvet/sdk` are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.9.0
 
