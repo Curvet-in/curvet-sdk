@@ -79,8 +79,10 @@ export class Curvet {
   /** App and key management (requires a CLI token). */
   readonly apps: Apps;
   /**
-   * Agency 2 runs. Needs a CLI token carrying `agency:run`, which `curvet login`
-   * does not request by default.
+   * Agency 2 runs. Needs the `agency:run` scope on whichever credential is used —
+   * a CLI token (`curvet login --scope agency:run`, not requested by default) or
+   * an app key with agent access turned on in the console. A CLI token wins when
+   * both are present.
    */
   readonly agency: Agency;
 
@@ -170,9 +172,24 @@ export class Curvet {
     // `run` streams SSE rather than returning JSON, so it needs the raw fetch and
     // credential alongside the ordinary JSON client the other calls use.
     const agencyBase = `${v1Base}/cli/agency`;
+    // Either credential reaches agency, and the header has to name the one being
+    // sent. The mount accepts both (middleware/cliAuth.js `authenticateCliOrAppKey`)
+    // and holds both to the same `agency:run` scope — a CLI token gets it from
+    // `curvet login --scope agency:run`, an app key from the console toggle.
+    //
+    // A CLI token wins when both are present: it identifies a person who signed
+    // in on this machine, while an app key may be shared by everyone using the
+    // app it ships inside.
+    //
+    // Sending the app key under `x-cli-token` would also authenticate, since the
+    // server falls back after the token lookup misses — but it puts a lie on the
+    // wire, and the next person reading a request log has to discover it.
+    const agencyCredential = cliToken
+      ? { appKey: cliToken, authHeaderName: "x-cli-token" as const }
+      : { appKey: appKey ?? "", authHeaderName: "x-app-key" as const };
     this.agency = new Agency(
-      new HttpClient({ ...shared, appKey: cliToken ?? "", authHeaderName: "x-cli-token", baseURL: agencyBase }),
-      { baseURL: agencyBase, appKey: cliToken ?? "", authHeaderName: "x-cli-token", fetch: fetchImpl },
+      new HttpClient({ ...shared, ...agencyCredential, baseURL: agencyBase }),
+      { baseURL: agencyBase, ...agencyCredential, fetch: fetchImpl },
     );
   }
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.0
+
+- `agency` now addresses the server with whichever credential the client holds:
+  a CLI token under `x-cli-token`, or — when there is no CLI token — the app key
+  under `x-app-key`. Previously it always sent `x-cli-token`, so a client built
+  with only an `appKey` sent an empty header and every agency call 401'd.
+
+  Both need the `agency:run` scope: a CLI token from
+  `curvet login --scope agency:run`, an app key from the console's agent-access
+  toggle. A CLI token wins when both are present — it identifies the person who
+  signed in, while an app key may be shared by everyone using the app it ships
+  inside.
+
 All notable changes to `@curvet/sdk` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
