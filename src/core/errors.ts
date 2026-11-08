@@ -2,6 +2,8 @@ export interface CurvetErrorOptions {
   status?: number;
   requestId?: string;
   raw?: unknown;
+  /** Machine-readable reason, when the server sends one (e.g. `"model_not_found"`). */
+  code?: string;
 }
 
 /** Base class for every error thrown by the SDK. */
@@ -9,6 +11,8 @@ export class CurvetError extends Error {
   readonly status?: number;
   readonly requestId?: string;
   readonly raw?: unknown;
+  /** Machine-readable reason, when the server sends one (e.g. `"model_not_found"`). */
+  readonly code?: string;
 
   constructor(message: string, opts: CurvetErrorOptions = {}) {
     super(message);
@@ -16,6 +20,7 @@ export class CurvetError extends Error {
     this.status = opts.status;
     this.requestId = opts.requestId;
     this.raw = opts.raw;
+    this.code = opts.code;
     // Restore prototype chain so `instanceof` works after transpilation.
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -27,7 +32,10 @@ export class AuthError extends CurvetError {}
 export class PermissionError extends CurvetError {}
 /** 400 — invalid/unknown model or malformed payload. */
 export class BadRequestError extends CurvetError {}
-/** 404 — job or workflow not found. */
+/**
+ * 404 — job or workflow not found, or (on the OpenAI-compatible routes such as
+ * `embeddings`) an unknown model, with `code: "model_not_found"`.
+ */
 export class NotFoundError extends CurvetError {}
 /** 5xx — upstream/server error (retried automatically). */
 export class APIError extends CurvetError {}
@@ -97,9 +105,19 @@ export function errorFromResponse(
   headers?: HeaderBag,
 ): CurvetError {
   const b = (body ?? {}) as Record<string, any>;
+  // Two envelopes reach this SDK: the playground's `{ success: false, error: "..." }`
+  // and the OpenAI-compatible routes' `{ error: { message, type, code } }`.
+  // Reading only the first turned every OpenAI-shaped refusal into "HTTP 404".
+  const oa = b.error && typeof b.error === "object" ? (b.error as Record<string, any>) : undefined;
   const message =
-    typeof b.error === "string" ? b.error : `HTTP ${status}`;
-  const base: CurvetErrorOptions = { status, requestId, raw: body };
+    typeof b.error === "string"
+      ? b.error
+      : typeof oa?.message === "string"
+        ? oa.message
+        : `HTTP ${status}`;
+  const code =
+    typeof oa?.code === "string" ? oa.code : typeof b.code === "string" ? b.code : undefined;
+  const base: CurvetErrorOptions = { status, requestId, raw: body, code };
 
   switch (status) {
     case 400:

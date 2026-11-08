@@ -26,7 +26,7 @@ Requires Node 18+ (uses the built-in `fetch`). For older runtimes, pass a `fetch
 
 The client accepts **either or both** of two credentials:
 
-- **App Key** (`x-app-key`) — for the Playground API (chat, image, video, audio, 3D, workflows, food, voice, balance, analytics). Get one from the Curvet Developer Portal with Playground access enabled. Env: `CURVET_APP_KEY`.
+- **App Key** (`x-app-key`) — for the Playground API (chat, embeddings, image, video, audio, 3D, workflows, food, voice, balance, analytics). Get one from the Curvet Developer Portal with Playground access enabled. Env: `CURVET_APP_KEY`.
 - **Enterprise API key** (`x-enterprise-key`) — an org-scoped admin key for the Enterprise API (`curvet.enterprise.*` — members, invites, per-member credits). Env: `CURVET_ENTERPRISE_KEY`.
 
 Provide whichever you need — **app key only**, **enterprise key only**, or **both**:
@@ -62,6 +62,49 @@ const res = await curvet.chat.create({
 });
 console.log(res.response, res.usage.credits);
 ```
+
+OpenRouter-style ids (e.g. `meta-llama/llama-3.3-70b-instruct`,
+`google/gemini-2.5-flash-lite`) are accepted as aliases of Curvet's own ids
+(`llama-3.3-70b`, `gemini-2.5-flash-lite`), so code moving from OpenRouter can
+keep its model names. Responses report the Curvet id (`res.metadata.model`).
+An alias names the same model, not a stand-in, with one caveat:
+`deepseek/deepseek-chat` runs Curvet's `deepseek-chat`, which is
+DeepSeek-V4-Flash. A `:free` id runs (and bills) as the regular model.
+`models.list({ type: "chat" })` returns the exact ids this key can call, each
+with the `aliases` it also answers to.
+
+### Embeddings
+
+OpenAI-compatible: the same request and response as OpenAI's
+`embeddings.create`, served from `POST /api/v1/embeddings` with your app key.
+
+```ts
+const { data, usage, x_curvet } = await curvet.embeddings.create({
+  model: "text-embedding-3-small",
+  input: ["How do I reset my password?", "Orders ship in 3-5 days."],
+  dimensions: 512, // optional, for models that can shorten their output
+});
+console.log(data[0].embedding.length, usage.prompt_tokens); // one vector per input, in order
+console.log(x_curvet?.credits_charged); // what this call cost
+```
+
+| Model | Vector size | `dimensions` | Max input per item | Alias |
+|---|---|---|---|---|
+| `text-embedding-3-small` (OpenAI) | 1536 | yes, to shorten | 8191 tokens | `openai/text-embedding-3-small` |
+| `all-minilm-l6-v2` (all-MiniLM-L6-v2) | 384 | no, fixed size | 512 tokens | `sentence-transformers/all-minilm-l6-v2` |
+
+Up to 2048 inputs per call. An input over the model's limit, or `dimensions` on
+a fixed-size model, is refused with `BadRequestError`, never silently
+truncated. Billing is per input token; `models.list({ type: "embedding" })`
+gives each model's rates.
+
+Pass `encoding_format: "base64"` to get each vector as a base64 string of
+little-endian float32 values instead of a `number[]`, which is smaller over the
+wire for large batches. A model id the server does not know throws
+`NotFoundError` with `code: "model_not_found"`.
+
+Vectors from different models, or from one model at different `dimensions`,
+are not comparable, so store the model id alongside your index.
 
 ### Image
 
@@ -115,8 +158,11 @@ const analytics = await curvet.analytics.get({ startDate: "2026-01-01", endDate:
 ```
 
 `models.list()` returns only what this key can actually call right now. Each
-entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface` and
-`pricing`, so you can tell what a model *does*, not just its modality.
+entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface`,
+`pricing` and `aliases` (plus `dims` on embedding models), so you can tell what
+a model *does*, not just its modality. `models.get()` accepts an alias too:
+`models.get("meta-llama/llama-3.3-70b-instruct")` returns the `llama-3.3-70b`
+entry.
 
 `capability` matters most for audio, where `type: "audio"` covers both
 directions. A `"transcription"` model takes a file on `voice.stt()`; passing one
@@ -334,7 +380,7 @@ try {
 | `BadRequestError` | 400 — invalid/unknown model or payload |
 | `InsufficientBalanceError` | 402 — not enough credits (`.required`, `.available`) |
 | `RateLimitError` | 429 — rate/cost cap (`.kind`, `.resetsAt`, `.retryAfterMs`) |
-| `NotFoundError` | 404 — job/workflow not found |
+| `NotFoundError` | 404 — job/workflow not found, or unknown embedding model (`.code === "model_not_found"`) |
 | `APIError` | 5xx — upstream error |
 | `ConnectionError` | network failure / timeout |
 | `JobFailedError` | async media job failed (`.jobId`) |

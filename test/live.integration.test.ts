@@ -5,13 +5,19 @@ import { Curvet } from "../src";
  * Live contract canary. Skipped unless CURVET_TEST_APP_KEY is set, so normal
  * `npm test` (and CI without the secret) never hits the network or spends credits.
  * Run with: CURVET_TEST_APP_KEY=cvt_app_xxx npm test
+ *
+ * CURVET_TEST_BASE_URL points it at another deployment (staging), and
+ * CURVET_TEST_EMBEDDING_MODEL turns on the embeddings check, which needs a
+ * backend that serves POST /api/v1/embeddings.
  */
 const KEY = process.env.CURVET_TEST_APP_KEY;
+const BASE_URL = process.env.CURVET_TEST_BASE_URL;
+const EMBEDDING_MODEL = process.env.CURVET_TEST_EMBEDDING_MODEL;
 
 describe.skipIf(!KEY)("live integration (real gateway)", () => {
   // Constructed lazily: skipIf still evaluates this body to collect tests,
   // so only build the client when a key is actually present.
-  const curvet = KEY ? new Curvet({ appKey: KEY }) : (null as unknown as Curvet);
+  const curvet = KEY ? new Curvet({ appKey: KEY, baseURL: BASE_URL }) : (null as unknown as Curvet);
 
   it("lists models", async () => {
     const models = await curvet.models.list();
@@ -65,6 +71,22 @@ describe.skipIf(!KEY)("live integration (real gateway)", () => {
       maxTokens: 20,
     });
     expect(r.response.toLowerCase()).toContain("pong");
+  }, 30_000);
+
+  it.skipIf(!EMBEDDING_MODEL)("embeddings.create returns one float vector per input", async () => {
+    const r = await curvet.embeddings.create({
+      model: EMBEDDING_MODEL!,
+      input: ["a red cube", "a blue sphere"],
+    });
+    expect(r.data).toHaveLength(2);
+    expect(r.data.map((d) => d.index)).toEqual([0, 1]);
+    expect(r.data[0].embedding.length).toBeGreaterThan(0);
+    expect(r.data[0].embedding.length).toBe(r.data[1].embedding.length);
+    expect(typeof r.data[0].embedding[0]).toBe("number");
+    expect(r.usage.prompt_tokens).toBeGreaterThan(0);
+    // Every successful call is charged (there is a per-request minimum), and
+    // the body says how much.
+    expect(r.x_curvet?.credits_charged).toBeGreaterThan(0);
   }, 30_000);
 
   it("image.generate returns a URL", async () => {

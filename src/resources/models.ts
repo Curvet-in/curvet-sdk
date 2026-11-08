@@ -80,9 +80,21 @@ export class Models {
     return models;
   }
 
-  /** Find a single model by id (or undefined). */
+  /**
+   * Find a single model by id, or by one of its `aliases` (or undefined).
+   *
+   * An alias such as `"meta-llama/llama-3.3-70b-instruct"` returns the entry for
+   * the model the server runs for it (`llama-3.3-70b`), so `.id` is always the
+   * Curvet id. Aliases match regardless of case, as the server matches them.
+   */
   async get(id: string, options?: ModelsListOptions): Promise<ModelInfo | undefined> {
-    return (await this.list(options)).find((m) => m.id === id);
+    const models = await this.list(options);
+    const exact = models.find((m) => m.id === id);
+    if (exact || typeof id !== "string") return exact;
+    const key = id.trim().toLowerCase();
+    return models.find(
+      (m) => m.id.toLowerCase() === key || (m.aliases ?? []).some((a) => a.toLowerCase() === key),
+    );
   }
 
   /** The app's rate limits as reported by GET /models. */

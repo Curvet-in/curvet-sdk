@@ -5,6 +5,55 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.14.0
+
+### Added
+
+- **`embeddings.create()`**: text embeddings, OpenAI-compatible. Takes
+  `{ model, input, dimensions?, encoding_format?, user? }` and returns OpenAI's
+  `{ object: "list", data: [{ index, embedding }], model, usage }`, one vector
+  per input in input order. `embedding` is typed `number[]`, or `string` when
+  `encoding_format: "base64"` is passed. Served by `POST /api/v1/embeddings`
+  with the app key, beside the playground rather than under it. Two models:
+  `text-embedding-3-small` (1536 dimensions, shortened with `dimensions`) and
+  `all-minilm-l6-v2` (384 dimensions, fixed).
+- The response's `x_curvet` (`{ credits_charged, billing, tokens_in }`) says
+  what the call cost, typed as the new `EmbeddingCharge`.
+- **Model aliases.** The server now accepts OpenRouter-style ids as aliases of
+  Curvet's own, e.g. `meta-llama/llama-3.3-70b-instruct` for `llama-3.3-70b`
+  or `google/gemini-2.5-flash-lite` for `gemini-2.5-flash-lite`; responses
+  report the Curvet id. `ModelInfo.aliases` lists them, and `models.get()`
+  now also finds a model by one of its aliases, in any case.
+- `ModelInfo.dims`: vector size, on embedding models. `ModelType` and
+  `ModelCapability` gain `"embedding"`, so
+  `models.list({ type: "embedding" })` lists them.
+- `CurvetError.code`: the server's machine-readable reason when it sends one,
+  such as `"model_not_found"`.
+- New types: `EmbeddingCreateParams`, `EmbeddingResponse`, `Embedding`,
+  `EmbeddingUsage`, `EmbeddingEncodingFormat`, `EmbeddingCharge`,
+  `KnownEmbeddingModelId` (`text-embedding-3-small`, `all-minilm-l6-v2`) and
+  `EmbeddingModelId`.
+- `KnownModelId` autocomplete adds the newly served chat models
+  `llama-3.3-70b`, `gemma-4-31b`, `nemotron-3.5-lightning`,
+  `nemotron-3-super-120b`, `nemotron-3.5-super-vl`, `nemotron-3-ultra-550b`
+  and `ali-qwen3.7-flash`, plus the existing `gemini-2.5-flash`,
+  `gemini-2.5-flash-lite`, `deepseek-chat` and `gpt-oss-120b`. Any string is
+  still accepted.
+
+### Fixed
+
+- Errors from OpenAI-shaped endpoints (`{ error: { message, code } }`) now carry
+  the server's message. Only `{ error: "..." }` was read before, so they
+  surfaced as a bare `HTTP 404`.
+
+### Notes
+
+- Embeddings, aliases and the new chat models all live on the server. Against
+  a backend that predates them, `embeddings.create()` throws
+  `NotFoundError("Route not found")`, an alias or new id is refused as an
+  unknown model, and catalogue entries carry no `aliases`; everything else is
+  unaffected.
+
 ## 0.13.0
 
 - `agency` now addresses the server with whichever credential the client holds:
