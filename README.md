@@ -91,7 +91,7 @@ console.log(x_curvet?.credits_charged); // what this call cost
 | Model | Vector size | `dimensions` | Max input per item | Alias |
 |---|---|---|---|---|
 | `text-embedding-3-small` (OpenAI) | 1536 | yes, to shorten | 8191 tokens | `openai/text-embedding-3-small` |
-| `all-minilm-l6-v2` (all-MiniLM-L6-v2) | 384 | no, fixed size | 512 tokens | `sentence-transformers/all-minilm-l6-v2` |
+| `all-minilm-l6-v2` (all-MiniLM-L6-v2) | 384 | no, fixed size | 256 tokens (about 1,000 characters) | `sentence-transformers/all-minilm-l6-v2` |
 
 Up to 2048 inputs per call. An input over the model's limit, or `dimensions` on
 a fixed-size model, is refused with `BadRequestError`, never silently
