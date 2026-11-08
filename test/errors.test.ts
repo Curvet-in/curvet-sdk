@@ -7,6 +7,7 @@ import {
   InsufficientBalanceError,
   RateLimitError,
   APIError,
+  NotFoundError,
 } from "../src";
 import { mockFetch } from "./helpers";
 
@@ -84,5 +85,24 @@ describe("error mapping", () => {
     const err = await clientReturning(400, { success: false, error: "bad" }).balance.get().catch((e) => e);
     expect(err.status).toBe(400);
     expect(err.raw).toEqual({ success: false, error: "bad" });
+  });
+
+  it("reads the message and code from an OpenAI-shaped error body", async () => {
+    const err = await clientReturning(404, {
+      error: { message: "The model 'x' does not exist", type: "invalid_request_error", code: "model_not_found", param: null },
+    })
+      .balance.get()
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.message).toBe("The model 'x' does not exist");
+    expect(err.code).toBe("model_not_found");
+  });
+
+  it("reads a top-level code from a playground error body", async () => {
+    const err = await clientReturning(409, { success: false, error: "Model is still training", code: "not_ready" })
+      .balance.get()
+      .catch((e) => e);
+    expect(err.message).toBe("Model is still training");
+    expect(err.code).toBe("not_ready");
   });
 });

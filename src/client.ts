@@ -2,6 +2,7 @@ import { HttpClient } from "./core/http";
 import { CurvetError } from "./core/errors";
 import type { FetchLike } from "./types/common";
 import { Chat } from "./resources/chat";
+import { Embeddings } from "./resources/embeddings";
 import { Images } from "./resources/image";
 import { Video } from "./resources/video";
 import { Audio } from "./resources/audio";
@@ -61,6 +62,8 @@ export interface CurvetOptions {
  */
 export class Curvet {
   readonly chat: Chat;
+  /** Text embeddings (`POST /api/v1/embeddings`, OpenAI-compatible). Uses the app key. */
+  readonly embeddings: Embeddings;
   readonly image: Images;
   readonly video: Video;
   readonly audio: Audio;
@@ -165,6 +168,10 @@ export class Curvet {
     this.workflows = new Workflows(client);
     this.food = new Food(v1Client);
     this.voice = new Voice(v1Client);
+    // Embeddings live on the OpenAI-compatible router at /api/v1, beside the
+    // playground rather than under it. That router accepts x-app-key as well as
+    // a Bearer token, so the ordinary v1 client reaches it unchanged.
+    this.embeddings = new Embeddings(v1Client);
     this.enterprise = new Enterprise(enterpriseClient);
     this.auth = new CliAuth(deviceClient, cliTokenClient);
     this.apps = new Apps(cliClient);

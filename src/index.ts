@@ -21,6 +21,7 @@ export type { CurvetErrorOptions } from "./core/errors";
 
 // Resources
 export { Chat } from "./resources/chat";
+export { Embeddings } from "./resources/embeddings";
 export { Images } from "./resources/image";
 export { MediaResource } from "./resources/media";
 export type { MediaParamsBase } from "./resources/media";
@@ -108,6 +109,14 @@ export type {
 // Types
 export type { Usage, RequestOptions, FetchLike } from "./types/common";
 export type { ChatRole, ChatMessage, ChatCreateParams, ChatResponse } from "./types/chat";
+export type {
+  EmbeddingCreateParams,
+  EmbeddingResponse,
+  Embedding,
+  EmbeddingUsage,
+  EmbeddingEncodingFormat,
+  EmbeddingCharge,
+} from "./types/embeddings";
 export type { ImageGenerateParams, ImageResponse } from "./types/image";
 export type {
   JobStatus,
@@ -128,4 +137,6 @@ export type {
   RateLimits,
   KnownModelId,
   ModelId,
+  KnownEmbeddingModelId,
+  EmbeddingModelId,
 } from "./types/models";

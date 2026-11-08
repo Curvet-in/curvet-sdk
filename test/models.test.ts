@@ -15,6 +15,22 @@ const COMING_SOON = {
   capability: "generation", available: false, comingSoon: true, surface: null, endpoint: null, pricing: null,
 };
 
+/** A chat model published with its OpenRouter-style alias. */
+const LLAMA = {
+  id: "llama-3.3-70b", name: "Llama 3.3 70B", type: "chat", provider: "deepinfra", cost: 0.001, credits: 1,
+  capability: "generation", available: true, comingSoon: false, surface: "api", endpoint: "POST /api/v1/playground/chat",
+  pricing: { meter: "tokens", unit: "credits_per_million_tokens", billing: "metered", input: 10, output: 32 },
+  aliases: ["meta-llama/llama-3.3-70b-instruct"],
+};
+
+/** An embedding model, as the app-key catalogue lists one. */
+const MINILM = {
+  id: "all-minilm-l6-v2", name: "all-MiniLM-L6-v2", type: "embedding", provider: "deepinfra", cost: 0.0001, credits: 0.01,
+  capability: "embedding", available: true, comingSoon: false, surface: "api", endpoint: "POST /api/v1/embeddings",
+  pricing: { meter: "tokens", unit: "credits_per_million_tokens", billing: "metered", input: 0.5 },
+  dims: 384, aliases: ["sentence-transformers/all-minilm-l6-v2"],
+};
+
 const rateLimits = { requestsPerHour: 100, costCapPerDay: 10 };
 
 /** Serve the runnable catalogue by default and the full one for `include=all`. */
@@ -84,6 +100,42 @@ describe("models", () => {
 
     const listenable = await curvet.models.list({ capability: "transcription" });
     expect(listenable.map((m) => m.id)).toEqual(["whisper-large-v3"]);
+  });
+
+  it("get() also finds a model by one of its aliases, in any case", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: { success: true, models: [...RUNNABLE, LLAMA, MINILM], rateLimits },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+
+    expect((await curvet.models.get("llama-3.3-70b"))?.id).toBe("llama-3.3-70b");
+    expect((await curvet.models.get("meta-llama/llama-3.3-70b-instruct"))?.id).toBe("llama-3.3-70b");
+    // Hugging Face casing, as people paste it; the server matches it too.
+    expect((await curvet.models.get("meta-llama/Llama-3.3-70B-Instruct"))?.id).toBe("llama-3.3-70b");
+    expect((await curvet.models.get("sentence-transformers/all-minilm-l6-v2"))?.id).toBe("all-minilm-l6-v2");
+    // Ids match regardless of case too, as the server matches them.
+    expect((await curvet.models.get("GPT-4o"))?.id).toBe("gpt-4o");
+    // A vendor id with no alias row is not guessed at, and entries without
+    // `aliases` (older deployments) are passed over rather than tripped on.
+    expect(await curvet.models.get("meta-llama/llama-3.1-8b-instruct")).toBeUndefined();
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("lists embedding models with their vector size and route", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: { success: true, models: [...RUNNABLE, LLAMA, MINILM], rateLimits },
+    }));
+    const curvet = new Curvet({ appKey: "k", fetch });
+
+    const embedders = await curvet.models.list({ type: "embedding" });
+    expect(embedders.map((m) => m.id)).toEqual(["all-minilm-l6-v2"]);
+    expect(embedders[0].dims).toBe(384);
+    expect(embedders[0].endpoint).toBe("POST /api/v1/embeddings");
+    expect((await curvet.models.list({ capability: "embedding" })).map((m) => m.id)).toEqual(["all-minilm-l6-v2"]);
+    // Embedders are not generation models, so a generation filter leaves them out.
+    expect((await curvet.models.list({ capability: "generation" })).map((m) => m.id)).not.toContain("all-minilm-l6-v2");
   });
 
   it("treats a missing capability as generation", async () => {
