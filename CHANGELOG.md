@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Follows the server's final November description: `ApiErrorCode` names the
+  codes added for the chat, image and media routes' own refusals and for the
+  server's own answers (`balance_held`, `messages_required`, `prompt_required`,
+  `model_unknown`, `workflow_run_stopped` and others). `balance_held` is a 429
+  the SDK retries after the server's short `Retry-After`: the balance is held by
+  the caller's own calls in progress. A finished media reply's
+  `usage.remainingBalance` can now be `null` (the balance could not be read in
+  time); it was typed as a number.
 - A refusal whose `Retry-After` is longer than 30 seconds (an exhausted hourly
   limit, daily cost cap or budget) is no longer retried: the error is thrown at
   once with `retryAfterMs` on it. Before, the SDK slept 30 seconds per retry and

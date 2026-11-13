@@ -31,7 +31,7 @@ export interface JobCost {
  * `/video`, `/audio`, `/3d`). Not on a job read back from `jobs.retrieve()` —
  * see {@link MediaJob.cost} there.
  */
-export interface MediaUsage extends Usage {
+export interface MediaUsage extends Omit<Usage, "remainingBalance"> {
   /**
    * `/audio` only, when long text was spoken in parts: how many (each one a
    * provider call, priced as one). `cost` and `credits` are then what the job
@@ -40,9 +40,10 @@ export interface MediaUsage extends Usage {
   parts?: number;
   /**
    * USD the owner can still spend: wallet plus points. Not the same figure as
-   * `remainingBalance` on chat and image, which is the wallet alone.
+   * `remainingBalance` on chat and image, which is the wallet alone. null when
+   * the balance could not be read in time; the job itself completed.
    */
-  remainingBalance?: number;
+  remainingBalance?: number | null;
 }
 
 /**

@@ -84,6 +84,23 @@ export type ApiErrorCode =
   | "body_too_large"
   | "bad_request"
   | "ip_rate_limited"
+  | "balance_held"
+  | "workflow_run_stopped"
+  | "prompt_required"
+  | "model_unknown"
+  | "model_wrong_type"
+  | "model_not_chat"
+  | "text_too_long"
+  | "upload_too_large"
+  | "messages_required"
+  | "invalid_parameter"
+  | "image_input_not_supported"
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "conflict"
+  | "too_many_requests"
+  | "request_refused"
   | (string & {});
 
 /** The `Idempotency-Key` refusals. */
