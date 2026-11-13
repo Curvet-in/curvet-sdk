@@ -101,6 +101,15 @@ export type ApiErrorCode =
   | "conflict"
   | "too_many_requests"
   | "request_refused"
+  | "model_not_found"
+  | "insufficient_quota"
+  | "turned_off"
+  | "not_ready"
+  | "idempotency_key_invalid"
+  | "idempotency_key_mismatch"
+  | "idempotency_key_in_use"
+  | "idempotency_key_not_replayable"
+  | "PROMPT_TOO_LONG"
   | (string & {});
 
 /** The `Idempotency-Key` refusals. */
