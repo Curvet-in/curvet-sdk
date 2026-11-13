@@ -5,7 +5,9 @@ import {
   RateLimitError,
   errorFromResponse,
 } from "./errors";
-import { fullJitterBackoff, isRetryableStatus, sleep } from "./retry";
+import { fullJitterBackoff, isIdempotencyInProgress, isRetryableStatus, sleep } from "./retry";
+
+const IDEMPOTENCY_HEADER = "idempotency-key";
 
 export interface HttpClientOptions {
   appKey: string;
@@ -43,6 +45,16 @@ export class HttpClient {
       accept: "application/json",
       ...(options?.headers ?? {}),
     };
+    // One key per logical POST, set once here — outside the retry loop — so
+    // every retry of this call carries the same key and the server runs (and
+    // charges) it once. The caller's own key wins: `options.idempotencyKey`,
+    // or an Idempotency-Key header they passed.
+    if (method.toUpperCase() === "POST") {
+      const passed = Object.keys(headers).find((h) => h.toLowerCase() === IDEMPOTENCY_HEADER);
+      const key = options?.idempotencyKey || (passed ? headers[passed] : "") || newIdempotencyKey();
+      if (passed) delete headers[passed];
+      headers[IDEMPOTENCY_HEADER] = key;
+    }
     let payload: string | FormData | undefined;
     if (body !== undefined) {
       if (typeof FormData !== "undefined" && body instanceof FormData) {
@@ -64,14 +76,18 @@ export class HttpClient {
 
         if (res.ok) return parsed as T;
 
+        // The server sends its id as x-curvet-request-id; x-request-id is
+        // what older servers (and proxies) send.
         const requestId =
+          res.headers.get("x-curvet-request-id") ??
           res.headers.get("x-request-id") ??
           (parsed as any)?.metadata?.requestId ??
           undefined;
         const err = errorFromResponse(res.status, parsed, requestId, res.headers);
 
-        if (isRetryableStatus(res.status) && attempt < maxRetries) {
-          await this.backoff(err, attempt, options?.signal);
+        const inProgress = isIdempotencyInProgress(res.status, parsed);
+        if ((isRetryableStatus(res.status) || inProgress) && attempt < maxRetries) {
+          await this.backoff(err, attempt, options?.signal, inProgress ? retryAfterMs(res.headers) : undefined);
           attempt++;
           continue;
         }
@@ -101,10 +117,17 @@ export class HttpClient {
     }
   }
 
-  private async backoff(err: CurvetError | undefined, attempt: number, signal?: AbortSignal) {
+  private async backoff(
+    err: CurvetError | undefined,
+    attempt: number,
+    signal?: AbortSignal,
+    waitMs?: number,
+  ) {
     let delay = fullJitterBackoff(attempt);
     if (err instanceof RateLimitError && err.retryAfterMs != null) {
       delay = Math.min(err.retryAfterMs, 30000);
+    } else if (waitMs != null) {
+      delay = Math.min(waitMs, 30000);
     }
     await sleep(delay, signal);
   }
@@ -139,6 +162,32 @@ export class HttpClient {
       },
     };
   }
+}
+
+/**
+ * A fresh Idempotency-Key: a v4 UUID. `crypto.randomUUID` where the runtime has
+ * it (Node 19+, browsers, Deno, Bun); otherwise built from `getRandomValues`, or
+ * from Math.random as a last resort (Node 18 has no global crypto) — a key only
+ * has to be unique among one app's calls to one route within a day.
+ */
+export function newIdempotencyKey(): string {
+  const c: any = (globalThis as any).crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Retry-After (seconds) as milliseconds, when present and sane. */
+function retryAfterMs(headers: { get(name: string): string | null }): number | undefined {
+  const raw = headers.get("retry-after");
+  if (raw == null || raw.trim() === "") return undefined;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? v * 1000 : undefined;
 }
 
 function safeJson(text: string): unknown {

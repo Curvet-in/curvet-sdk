@@ -5,6 +5,18 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Every POST now sends an `Idempotency-Key` header: one UUID per call, re-sent
+  on every retry of that call, so a retried call is run and charged once by the
+  server. Pass your own with `options.idempotencyKey` (or an `Idempotency-Key`
+  header) to make a call safe to repeat across processes.
+- A `409` with code `idempotency_key_in_use` (an earlier attempt of the same
+  call is still running) is retried, honouring `Retry-After`.
+- Errors read the request id from `x-curvet-request-id`, which is what the
+  server sends; `x-request-id` is the fallback. Previously `err.requestId` was
+  empty for most errors.
+
 ## 0.13.0
 
 - `agency` now addresses the server with whichever credential the client holds:

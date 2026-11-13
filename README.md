@@ -340,7 +340,21 @@ try {
 | `JobFailedError` | async media job failed (`.jobId`) |
 | `JobTimeoutError` | async job exceeded poll timeout (`.jobId`) |
 
-`429` and `5xx` (and pre-response network errors) are retried automatically with exponential backoff + jitter, respecting rate-limit resets. `4xx` are never retried.
+`429` and `5xx` (and pre-response network errors) are retried automatically with exponential backoff + jitter, respecting rate-limit resets. `4xx` are never retried, except a `409 idempotency_key_in_use` (below).
+
+### Idempotency
+
+Every POST carries an `Idempotency-Key` (a UUID generated per call) and every retry of that call re-sends the same key, so a call that timed out and was retried is run and charged once. The server keeps a finished call's reply for 24 hours: a repeat gets that reply (with `Idempotent-Replayed: true`) instead of a second run. A repeat that arrives while the first attempt is still running gets `409 idempotency_key_in_use`, which the SDK retries. Streamed replies are not kept.
+
+To make a call safe to repeat across processes or restarts, pass your own key:
+
+```ts
+await curvet.chat.create(params, { idempotencyKey: `order-${orderId}` });
+```
+
+Reusing a key with a different request is refused with `422 idempotency_key_mismatch`.
+
+Errors carry the server's request id (`err.requestId`, from `x-curvet-request-id`) — quote it to support.
 
 ## Configuration
 
@@ -357,7 +371,7 @@ new Curvet({
 });
 ```
 
-Per-call overrides: every method accepts a final `options` arg (`{ signal, timeout, maxRetries }`; media methods also take `{ pollIntervalMs, pollTimeoutMs, onProgress }`).
+Per-call overrides: every method accepts a final `options` arg (`{ signal, timeout, maxRetries, headers, idempotencyKey }`; media methods also take `{ pollIntervalMs, pollTimeoutMs, onProgress }`).
 
 ## Development
 
