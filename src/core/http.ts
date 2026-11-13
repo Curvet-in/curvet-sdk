@@ -2,10 +2,10 @@ import type { FetchLike, RequestOptions } from "../types/common";
 import {
   CurvetError,
   ConnectionError,
-  RateLimitError,
   errorFromResponse,
+  retryAfterHeaderMs,
 } from "./errors";
-import { fullJitterBackoff, isIdempotencyInProgress, isRetryableStatus, sleep } from "./retry";
+import { fullJitterBackoff, isIdempotencyInProgress, shouldRetry, sleep } from "./retry";
 
 const IDEMPOTENCY_HEADER = "idempotency-key";
 
@@ -144,18 +144,18 @@ export class HttpClient {
 
         if (isIdempotencyInProgress(res.status, parsed)) {
           if (mayKeepAsking()) {
-            await sleep(untilDeadline(retryAfterMs(res.headers) ?? IN_PROGRESS_PAUSE_MS), signalOf);
+            await sleep(untilDeadline(retryAfterHeaderMs(res.headers) ?? IN_PROGRESS_PAUSE_MS), signalOf);
             continue;
           }
           // The wait is off (no key, or idempotencyWaitMs 0): an ordinary retry.
           if (!(waitMs > 0) && attempt < maxRetries) {
-            await this.backoff(err, attempt, signalOf, retryAfterMs(res.headers));
+            await this.backoff(err, attempt, signalOf, retryAfterHeaderMs(res.headers));
             attempt++;
             continue;
           }
           throw err;
         }
-        if (isRetryableStatus(res.status) && attempt < maxRetries) {
+        if (shouldRetry(res.status, err.retryable) && attempt < maxRetries) {
           await this.backoff(err, attempt, signalOf);
           attempt++;
           continue;
@@ -199,7 +199,9 @@ export class HttpClient {
     waitMs?: number,
   ) {
     let delay = fullJitterBackoff(attempt);
-    if (err instanceof RateLimitError && err.retryAfterMs != null) {
+    // The server's own wait (Retry-After, a StepError's retryAfterSec, a rate
+    // limit's reset), capped so one answer cannot park the caller for long.
+    if (err?.retryAfterMs != null) {
       delay = Math.min(err.retryAfterMs, 30000);
     } else if (waitMs != null) {
       delay = Math.min(waitMs, 30000);
@@ -255,14 +257,6 @@ export function newIdempotencyKey(): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/** Retry-After (seconds) as milliseconds, when present and sane. */
-function retryAfterMs(headers: { get(name: string): string | null }): number | undefined {
-  const raw = headers.get("retry-after");
-  if (raw == null || raw.trim() === "") return undefined;
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= 0 ? v * 1000 : undefined;
 }
 
 function safeJson(text: string): unknown {

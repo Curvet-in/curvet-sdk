@@ -61,7 +61,37 @@ const res = await curvet.chat.create({
   maxTokens: 200,
 });
 console.log(res.response, res.usage.credits);
+console.log(res.finishReason, res.usage.promptTokens, res.usage.completionTokens, res.usage.billing);
 ```
+
+`finishReason` says why the answer stopped (`"length"` when it was cut at the
+answer limit). Without `maxTokens`, a call billed per token gets the provider's
+own limit (`maxOutputTokens` on the model) and any other call the model's
+default. `res.response` can be null when the model answered with no text — guard
+with `res.response ?? ""` where it matters.
+
+The request also takes `allowFallbacks`, `responseFormat` (JSON mode), `topP`,
+`stop`, `seed`, `frequencyPenalty`, `presencePenalty`, `reasoningEffort`, and
+images for vision models — as `imageUrl` / `images`, or as content blocks:
+
+```ts
+await curvet.chat.create({
+  model: "gpt-4o",
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "What is in this picture?" },
+        { type: "image_url", image_url: { url: "https://example.com/cat.png" } },
+      ],
+    },
+  ],
+  responseFormat: { type: "json_object" },
+});
+```
+
+A field the model's provider does not take is left out and named in the
+`X-Curvet-Ignored-Params` response header.
 
 ### Image
 
@@ -72,6 +102,18 @@ const img = await curvet.image.generate({
   size: "1024x1024", // single field — not width/height
 });
 console.log(img.imageUrl);
+```
+
+To edit or build on an image, pass `image` (an https URL or `data:` URI) or
+upload `files` (sent as multipart; at most 10, 25 MB each; give each an image
+MIME type):
+
+```ts
+await curvet.image.generate({
+  model: "qwen-image-edit",
+  prompt: "make the sky purple",
+  files: [new Blob([bytes], { type: "image/png" })],
+});
 ```
 
 ### Video (async, handled for you)
@@ -98,6 +140,15 @@ if (job.status !== "completed") {
 const status = await curvet.jobs.retrieve(job.jobId!);
 ```
 
+A job read back with `jobs.retrieve()` is `queued`, `processing`, `completed` or
+`failed`, and carries `cost` (`estimated`, `reserved`, and `actual` once
+settled), `eta`, `type`, `model`, `thumbnailUrl`, `outputMetadata` (the
+provider's duration, resolution, format, …) and, when it failed, `stepError`
+(the structured reason). A submit that finished while the server waited carries
+`usage` and `outputMetadata`; one still running carries `message`, `statusUrl`
+and `estimatedWaitTime`. A job that finished without an output URL comes back
+`completed` with no `mediaUrl`.
+
 ### Audio & 3D (async, same as video)
 
 ```ts
@@ -115,8 +166,13 @@ const analytics = await curvet.analytics.get({ startDate: "2026-01-01", endDate:
 ```
 
 `models.list()` returns only what this key can actually call right now. Each
-entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface` and
-`pricing`, so you can tell what a model *does*, not just its modality.
+entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface`,
+`pricing`, `aliases`, `maxOutputTokens`, `healthStatus` and
+`unavailableReason`, so you can tell what a model *does*, not just its modality.
+Your own custom models carry `group: "mine"` and `baseModel`; embedding models
+carry `dims`, `supportsDimensions` and `maxInputTokens`. `pricing.billing` is
+`"metered"` when a call is billed on the token rates now, `"flat_per_request"`
+when the flat per-call credit still applies.
 
 `capability` matters most for audio, where `type: "audio"` covers both
 directions. A `"transcription"` model takes a file on `voice.stt()`; passing one
@@ -136,7 +192,7 @@ everything.filter((m) => m.comingSoon); // announced, not yet callable
 
 `analytics.get()` returns an `overview` plus `modelBreakdown`,
 `categoryBreakdown`, `statusBreakdown` and `errorBreakdown` — per-model cost,
-request counts and mean latency:
+request counts and mean latency — and the `app` they belong to:
 
 ```ts
 const { overview, modelBreakdown } = await curvet.analytics.get();
@@ -167,6 +223,8 @@ applies, so those names are exactly the keys `run`/`submit` will read.
 ```ts
 // JSON inputs:
 const out = await curvet.workflows.run("workflowId", { inputs: { topic: "ai" } });
+if (!out.success) console.warn("some steps failed:", out.nodeErrors);
+console.log(out.outputs);
 
 // With file inputs (multipart, handled for you):
 await curvet.workflows.run("workflowId", {
@@ -175,8 +233,15 @@ await curvet.workflows.run("workflowId", {
 });
 ```
 
+**Check `success`.** A run in which a step failed but the run still finished
+comes back (HTTP 200) with `success: false` and the failures in `nodeErrors`:
+`run()` returns it rather than throwing, because the other steps' outputs — and
+charges — are real. A run that stopped altogether throws.
+
 For long workflows (video/audio/3D nodes), use the **pollable** API — submit
-and auto-poll to completion with live progress, instead of one long HTTP call:
+and auto-poll to completion with live progress, instead of one long HTTP call.
+A run parked at a Review step reports `status: "waiting"` (with `waitingOn`)
+and `runAndPoll` keeps polling until it resumes or `pollTimeoutMs` passes:
 
 ```ts
 const run = await curvet.workflows.runAndPoll(
@@ -332,15 +397,44 @@ try {
 | `AuthError` | 401 — missing/invalid app key or enterprise key |
 | `PermissionError` | 403 — app inactive, playground disabled, model/category not allowed |
 | `BadRequestError` | 400 — invalid/unknown model or payload |
-| `InsufficientBalanceError` | 402 — not enough credits (`.required`, `.available`) |
-| `RateLimitError` | 429 — rate/cost cap (`.kind`, `.resetsAt`, `.retryAfterMs`) |
-| `NotFoundError` | 404 — job/workflow not found |
-| `APIError` | 5xx — upstream error |
+| `InsufficientBalanceError` | 402 — not enough credits (`.required`, `.available`, `.requiredCredits`) |
+| `RateLimitError` | 429 — request limit, cost cap, credit budget or a busy provider (`.kind`, `.resetsAt`, `.retryAfterMs`; `.scope` / `.period` for a budget) |
+| `NotFoundError` | 404 — job/workflow not found, or a model that is not available |
+| `ConflictError` | 409 — an `Idempotency-Key` refusal, or a custom model not ready |
+| `GoneError` | 410 — the model is retired |
+| `PayloadTooLargeError` | 413 — input or upload too large |
+| `UnprocessableEntityError` | 422 — refused by content policy, or a key reused with a different request |
+| `FailedDependencyError` | 424 — a connected app is needed, or a step it depends on failed |
+| `APIError` | 5xx, and any other status without its own class. The 409/410/413/422/424 classes extend it, so code that caught those as `APIError` still does |
 | `ConnectionError` | network failure / timeout |
 | `JobFailedError` | async media job failed (`.jobId`) |
 | `JobTimeoutError` | async job exceeded poll timeout (`.jobId`) |
 
-`429` and `5xx` (and pre-response network errors) are retried automatically with exponential backoff + jitter, respecting rate-limit resets. `4xx` are never retried, except a `409 idempotency_key_in_use` (below).
+Every error carries what the server sent with it:
+
+| Field | What |
+|---|---|
+| `code` | the stable machine-readable reason, when there is one: a model/provider failure's code (`provider_busy`, `content_policy`, `model_retired`, …), an `idempotency_key_*` code, `upload_too_large`, … |
+| `type` | OpenAI's error type for it (`invalid_request_error`, `rate_limit_error`, `insufficient_quota`, `api_error`) |
+| `retryable` | whether the server says a retry can succeed |
+| `provider`, `model`, `providerStatus` | for a model or provider failure: who failed, and the provider's own HTTP status |
+| `stepError` | for a model or provider failure: the full structured error (`title`, `scope`, `actions`, `suggestedModels`, `refundedCredits`, …) |
+| `jobId` | the media job that failed (`JobFailedError` too) |
+| `requestId` | the server's request id — quote it to support |
+| `retryAfterMs` | how long the server asks you to wait (`Retry-After`, or a limit's reset) |
+| `raw` | the error body exactly as sent |
+
+```ts
+try {
+  await curvet.chat.create(params);
+} catch (err) {
+  if (err instanceof CurvetError && err.code === "content_policy") {
+    console.error(err.stepError?.message); // the sentence to show
+  }
+}
+```
+
+Retries: when an error body says `retryable`, the SDK follows it — a `503 provider_unavailable` (our account at the provider) is not retried, a retryable answer is, waiting what `Retry-After` says (capped at 30 s). When the body does not say, `429` and `5xx` (and pre-response network errors) are retried with exponential backoff + jitter, respecting rate-limit resets, and other `4xx` are not — except a `409 idempotency_key_in_use` (below).
 
 ### Idempotency
 
@@ -404,7 +498,15 @@ npm install
 npm run typecheck
 npm test        # unit tests (mocked HTTP) — no network, no credits
 npm run build   # ESM + CJS + d.ts via tsup
+```
 
+`test/contract.test.ts` checks the SDK against the server's own API description,
+copied to `test/fixtures/openapi.json`: every field the server documents for a
+reply must survive the SDK's parsing and be declared on its types. When the
+server's API changes, copy its `documentation/api/openapi.json` over the fixture
+and run the test; a failure names the field to add.
+
+```bash
 # live contract test (spends a few credits):
 CURVET_TEST_APP_KEY=cvt_app_xxx npm test
 ```

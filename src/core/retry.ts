@@ -36,6 +36,15 @@ export function isRetryableStatus(status: number): boolean {
 }
 
 /**
+ * Whether to retry an error answer: the server's own `retryable`, when the body
+ * carries one (a `503 provider_unavailable` is our account at the provider and
+ * will not clear on a retry); otherwise {@link isRetryableStatus}.
+ */
+export function shouldRetry(status: number, retryable?: boolean): boolean {
+  return typeof retryable === "boolean" ? retryable : isRetryableStatus(status);
+}
+
+/**
  * A 409 that says an earlier attempt with the same Idempotency-Key is still
  * running (typically the attempt that timed out on our side). Retrying with the
  * same key returns that attempt's result once it finishes, without running it again.

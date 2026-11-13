@@ -33,6 +33,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server sends; `x-request-id` is the fallback. Previously `err.requestId` was
   empty for most errors.
 
+### Types and errors match the server
+
+The server now publishes a machine-readable description of its API
+(`openapi.json`, built from the JSON Schemas of what the routes return). The
+SDK's hand-written types had drifted from it; this brings them in line. Nothing
+exported is removed or renamed, and no call throws where it returned before.
+
+- **Errors carry what the server sent.** Every thrown error now has `code`,
+  `type`, `retryable`, and — for a model or provider failure — `provider`,
+  `model`, `providerStatus` and the structured `stepError`; `jobId` on a failed
+  media job; `requestId` also from the body; `retryAfterMs` from `Retry-After`
+  (or the StepError's `retryAfterSec`) on any error, not only 429s. Both error
+  envelopes are read: the playground's `{ success: false, error, … }` and the
+  OpenAI-style `{ error: { message, type, code, … } }`.
+- **New error classes** for statuses that had none: `ConflictError` (409),
+  `GoneError` (410, model retired), `PayloadTooLargeError` (413),
+  `UnprocessableEntityError` (422, content policy / key mismatch) and
+  `FailedDependencyError` (424). Each extends `APIError`, which those statuses
+  mapped to before, so `instanceof APIError` still holds for them. `APIError`'s
+  docs no longer claim it is only 5xx.
+- `InsufficientBalanceError.requiredCredits` (402 on `/audio`).
+  `RateLimitError` reads the credit budget refusal (`kind: "budget"`, with
+  `scope` and `period`) and the reset time the server sends now (`resetsAt`);
+  `resetsIn`, which older servers sent, is still read.
+- **Retries follow the server.** When an error body says `retryable`, the SDK
+  retries exactly when it is true (waiting what `Retry-After` says, capped at
+  30 s). A `503 provider_unavailable` — our account at the provider — is no
+  longer retried pointlessly. When the body does not say, the old rule stands
+  (429 and 5xx).
+- **Chat.** Request: `allowFallbacks`, `responseFormat`, `topP`, `stop`, `seed`,
+  `frequencyPenalty`, `presencePenalty`, `reasoningEffort`, `imageUrl`,
+  `images`, and message `content` as an array of text and image blocks
+  (`ChatContentMessage`, `ChatContentPart`). Reply: `finishReason`,
+  `usage.promptTokens` / `completionTokens` / `totalTokens` / `billing`
+  (`ChatUsage`). The `maxTokens` doc no longer says it defaults to 1000: without
+  it a token-billed call gets the provider's own limit.
+- **Image.** `image` (a source URL or `data:` URI) and `files` (uploaded as
+  multipart).
+- **Media and jobs.** `JobStatus` gains `"queued"` (not terminal: polling
+  continues). A media job carries `outputMetadata` (the provider's duration,
+  resolution, … — previously dropped), `thumbnailUrl`, `stepError`,
+  `faultKind`, `faultRetryable`, `type`, `model`, `pollCount`, `createdAt`,
+  `updatedAt`, and on a 202 `message`, `statusUrl` and `estimatedWaitTime`;
+  `usage.parts` (`MediaUsage`) for audio spoken in parts. A `JobFailedError`
+  carries the job's `stepError`, `code`, `retryable`, `provider` and `model`.
+- **A finished media reply whose URL is null** (the job ended without an
+  output) is now `status: "completed"` with no `mediaUrl`, instead of
+  `"processing"` — `generate()` no longer polls the job once more to find out.
+- **Models.** `ModelInfo` gains `aliases`, `group`, `baseModel`,
+  `maxOutputTokens`, `unavailableReason`, `healthStatus`, `dims`,
+  `supportsDimensions`, `maxInputTokens`; `ModelPricing.billing` gains
+  `"flat_per_request"` (what the server sends; `"flat"` stays in the union),
+  plus `tiers` and `minimum_per_request`; `ModelCapability` gains `"music"` and
+  `"embedding"`, `ModelType` gains `"embedding"`. New types for the
+  OpenAI-style model list: `OpenAIModelList`, `OpenAIModel`,
+  `OpenRouterPricing`, `CurvetPricing`.
+- **Balance.** `breakdown` gains `walletUSD`, `pointsAsUSD`, `earnedCredits`,
+  `creditModel`, `creditLimit` and `creditLimitRemaining`.
+  `personalSpendable` is deprecated: the server never sends it.
+- **Analytics.** The result now carries the reply's `app` (`{ name, appKey }`),
+  which was dropped. The flat `totalRequests` / `totalCost` /
+  `requestsByModel` / `requestsByCategory` fields are documented as never
+  returned (kept, deprecated).
+- **Workflows.** `WorkflowRunResult` is typed (`runId`, `outputs`, `fullState`,
+  `nodeStateById`, `nodeErrors`). **Check `success`:** a synchronous run in
+  which a step failed but the run finished comes back with `success: false` —
+  `run()` returns it, as before, rather than throwing. Run status gains
+  `"waiting"` (parked at a Review step) with `waitingOn`, and `executionTime`;
+  `submit()` returns `statusUrl`.
+- A contract test (`test/contract.test.ts`) checks the SDK against a copy of
+  the server's `openapi.json`: a field the server documents and the SDK drops,
+  or does not declare, fails it.
+
+### Corrected types you may notice
+
+These types claimed something the server does not guarantee. Code that relied
+on the wrong claim may need a guard when it next compiles; nothing changes at
+runtime unless stated.
+
+- `ChatResponse.metadata.requestId` and `ImageResponse.metadata.requestId` are
+  optional: the server can omit them.
+- `WorkflowSummary.title` (and so `WorkflowDetail.title`) is optional: a
+  workflow saved without a title has none.
+- `JobCost.estimated` and `JobCost.reserved` are required (the server always
+  sends them), `JobCost.actual` can be null (until the job settles), and
+  `MediaJob.eta` can be null. Only code that builds its own `JobCost` objects
+  can notice the first.
+- `AnalyticsOverview.avgCostPerRequest`, `AnalyticsBreakdownRow.avgCostPerRequest`
+  and `AnalyticsBreakdownRow.category` can be null.
+- `JobStatus`, `WorkflowRunStatus` and `RateLimitError.kind` have new members
+  (`"queued"`, `"waiting"`, `"budget"`); an exhaustive `switch` over them will
+  ask for the new case. At runtime, a budget refusal now reads
+  `kind: "budget"` (it read `"rate"` before), and the cost cap's
+  `RateLimitError.used` is a number as typed (it was the server's string, e.g.
+  `"10.0000"`).
+- `ChatCreateParams.messages` items may be a `ChatContentMessage`, whose
+  `content` is a string or an array of blocks. `ChatMessage` itself is
+  unchanged; only code that reads `.content` back out of its own
+  `ChatCreateParams` object as a string needs a guard.
+- `PollOptions.onProgress` receives `undefined`, not `null`, for an unknown ETA
+  (its type always said `string | undefined`).
+- Not narrowed in this release: `ChatResponse.response` stays `string`,
+  although the server sends null when the model answered with no text. Making
+  it `string | null` would stop `res.response.trim()` compiling everywhere; it
+  is documented on the field instead.
+
 ## 0.13.0
 
 - `agency` now addresses the server with whichever credential the client holds:

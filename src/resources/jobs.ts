@@ -3,7 +3,7 @@ import type { MediaJob, PollOptions } from "../types/job";
 import type { RequestOptions } from "../types/common";
 import { normalizeJob } from "../core/normalize";
 import { pollUntil, PollTimeoutError } from "../core/poll";
-import { JobFailedError, JobTimeoutError } from "../core/errors";
+import { JobFailedError, JobTimeoutError, stepErrorFields } from "../core/errors";
 
 export interface JobDefaults {
   pollIntervalMs: number;
@@ -60,7 +60,7 @@ export class Job {
         timeoutMs,
         signal: opts.signal,
         isTerminal: (r) => r.status === "completed" || r.status === "failed",
-        onTick: (r) => opts.onProgress?.(r.progress ?? 0, r.eta),
+        onTick: (r) => opts.onProgress?.(r.progress ?? 0, r.eta ?? undefined),
       });
     } catch (e) {
       if (e instanceof PollTimeoutError) {
@@ -73,8 +73,13 @@ export class Job {
     }
 
     if (result.status === "failed") {
+      // The job's StepError gives the error its code, retryable, provider and
+      // model; `faultRetryable` stands in on rows that predate it.
+      const fields = stepErrorFields(result.stepError);
       throw new JobFailedError(result.error || `Job ${this.id} failed`, this.id, {
         raw: result.raw,
+        ...fields,
+        retryable: fields.retryable ?? result.faultRetryable ?? undefined,
       });
     }
     return result;
