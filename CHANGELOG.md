@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- A refusal whose `Retry-After` is longer than 30 seconds (an exhausted hourly
+  limit, daily cost cap or budget) is no longer retried: the error is thrown at
+  once with `retryAfterMs` on it. Before, the SDK slept 30 seconds per retry and
+  was refused again each time, so such a call took about a minute to fail.
 - Every POST now sends an `Idempotency-Key` header: one UUID per call, re-sent
   on every retry of that call, so a retried call that finished on the server is
   answered with its first reply instead of being run and charged again. Pass

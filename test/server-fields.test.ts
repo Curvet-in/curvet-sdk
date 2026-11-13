@@ -54,6 +54,36 @@ const stepErrorReply = (status: number, code: string, retryable: boolean, extra:
 });
 
 describe("retries follow the server's `retryable`", () => {
+  it("a 429 whose Retry-After is longer than one sleep may last is not retried: the error comes back at once", async () => {
+    let n = 0;
+    const fetch = mockFetch(() => {
+      n++;
+      return {
+        status: 429,
+        headers: { "retry-after": "1800" },
+        body: { success: false, error: "Hourly limit reached", code: "rate_limit_exceeded", type: "rate_limit_error", retryable: true },
+      };
+    });
+    const started = Date.now();
+    const err = await new Curvet({ appKey: "k", fetch, maxRetries: 2 }).chat.create(CHAT).catch((e) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.retryAfterMs).toBe(1800000);
+    expect(n).toBe(1);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("a 429 with a short Retry-After is still waited for and retried", async () => {
+    let n = 0;
+    const fetch = mockFetch(() =>
+      ++n === 1
+        ? { status: 429, headers: { "retry-after": "0" }, body: { success: false, error: "busy", code: "provider_busy", retryable: true } }
+        : chatOk,
+    );
+    const res = await new Curvet({ appKey: "k", fetch, maxRetries: 2 }).chat.create(CHAT);
+    expect(res.response).toBe("pong");
+    expect(n).toBe(2);
+  });
+
   it("a 503 the server marks not retryable (our account at the provider) is not retried", async () => {
     let n = 0;
     const fetch = mockFetch(() => {

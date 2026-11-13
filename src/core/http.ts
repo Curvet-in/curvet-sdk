@@ -45,6 +45,9 @@ export interface RequestArgs {
  * The single place that knows about fetch, headers, base URL, error mapping,
  * and retries. Resources call `request()`; everything else stays mockable.
  */
+/** The longest one sleep between retries may last, whatever the server asked for. */
+const MAX_SERVER_WAIT_MS = 30000;
+
 export class HttpClient {
   constructor(private opts: HttpClientOptions) {}
 
@@ -158,7 +161,12 @@ export class HttpClient {
           }
           throw err;
         }
-        if (shouldRetry(res.status, err.retryable) && attempt < maxRetries) {
+        // The server said when to come back (Retry-After, a limit's reset). When
+        // that is further away than one sleep here may last, a retry after the
+        // shorter sleep can only be refused again: give the caller the error
+        // now, with retryAfterMs on it, instead of sleeping twice for nothing.
+        const waitsTooLong = err.retryAfterMs != null && err.retryAfterMs > MAX_SERVER_WAIT_MS;
+        if (shouldRetry(res.status, err.retryable) && attempt < maxRetries && !waitsTooLong) {
           await this.backoff(err, attempt, signalOf);
           attempt++;
           continue;
@@ -206,9 +214,9 @@ export class HttpClient {
     // The server's own wait (Retry-After, a StepError's retryAfterSec, a rate
     // limit's reset), capped so one answer cannot park the caller for long.
     if (err?.retryAfterMs != null) {
-      delay = Math.min(err.retryAfterMs, 30000);
+      delay = Math.min(err.retryAfterMs, MAX_SERVER_WAIT_MS);
     } else if (waitMs != null) {
-      delay = Math.min(waitMs, 30000);
+      delay = Math.min(waitMs, MAX_SERVER_WAIT_MS);
     }
     await sleep(delay, signal);
   }
