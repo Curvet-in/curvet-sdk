@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed, is over 1 MB, comes from embeddings, or belongs to an account whose
   content settings do not allow storing replies is not kept: a repeat gets
   `409 idempotency_key_not_replayable` (not run or charged again, and the reply
-  cannot be fetched again). A failed call frees its key, so a repeat runs again;
+  cannot be fetched again). A reply that only acknowledges work — a media job's
+  `202` + `jobId`, an async workflow run's `202` + `runId` — is always kept and
+  replayed, whatever the content settings. A failed call frees its key, so a
+  repeat runs again;
   a failed SYNCHRONOUS workflow run is the exception to "charged once" — its
   earlier steps stay charged and a repeat runs (and charges) the whole workflow
   again. Use `workflows.submit` / `runAndPoll` where that matters.

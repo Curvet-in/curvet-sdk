@@ -466,7 +466,7 @@ What a repeat with the same key gets when the first call did not simply finish:
 |---|---|
 | still running | `409 idempotency_key_in_use` (the SDK waits and asks again) |
 | failed (any 4xx/5xx), or a stream that failed and was refunded | runs again — a failed call is refunded or never charged (but see the workflow exception below) |
-| finished, but its reply was **not kept**: streamed, over 1 MB, embeddings (vectors are never stored), or an account whose content settings do not allow storing replies | `409 idempotency_key_not_replayable` — not run or charged again, and the reply **cannot be fetched again**: for those calls a lost reply is lost |
+| finished, but its reply was **not kept**: streamed, over 1 MB, embeddings (vectors are never stored), or an account whose content settings do not allow storing replies — except a reply that only acknowledges work (a media job's `202` + `jobId`, an async run's `202` + `runId`), which is always kept and replayed | `409 idempotency_key_not_replayable` — not run or charged again, and the reply **cannot be fetched again**: for those calls a lost reply is lost |
 | same key, different request | `422 idempotency_key_mismatch` |
 
 **The exception to "charged once":** a synchronous workflow run (`workflows.run`) that fails part-way answers an error while the steps that ran before the failure stay charged. The failure frees the key, so a retry with the same key — yours, or the SDK asking again after a timeout — runs, and charges, the whole workflow again. Use `workflows.submit` / `runAndPoll` (the `runId` reply is kept and replayed) for workflows that must not run twice.
