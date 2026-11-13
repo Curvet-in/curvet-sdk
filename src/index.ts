@@ -9,6 +9,11 @@ export {
   BadRequestError,
   NotFoundError,
   APIError,
+  ConflictError,
+  GoneError,
+  PayloadTooLargeError,
+  UnprocessableEntityError,
+  FailedDependencyError,
   ConnectionError,
   InsufficientBalanceError,
   RateLimitError,
@@ -39,6 +44,7 @@ export type {
   AnalyticsResult,
   AnalyticsOverview,
   AnalyticsBreakdownRow,
+  AnalyticsApp,
 } from "./resources/analytics";
 export { Workflows, WorkflowRuns } from "./resources/workflows";
 export type {
@@ -46,6 +52,7 @@ export type {
   WorkflowRunResult,
   WorkflowRunStatus,
   WorkflowRunNode,
+  WorkflowRunWaitingOn,
   WorkflowRun,
   WorkflowSubmitResult,
   WorkflowPollOptions,
@@ -107,13 +114,26 @@ export type {
 
 // Types
 export type { Usage, RequestOptions, FetchLike } from "./types/common";
-export type { ChatRole, ChatMessage, ChatCreateParams, ChatResponse } from "./types/chat";
+export type {
+  ChatRole,
+  ChatMessage,
+  ChatContentMessage,
+  ChatContentPart,
+  ChatTextPart,
+  ChatImagePart,
+  ChatResponseFormat,
+  ChatReasoningEffort,
+  ChatCreateParams,
+  ChatResponse,
+  ChatUsage,
+} from "./types/chat";
 export type { ImageGenerateParams, ImageResponse } from "./types/image";
 export type {
   JobStatus,
   MediaKind,
   MediaJob,
   JobCost,
+  MediaUsage,
   VideoGenerateParams,
   AudioGenerateParams,
   ThreeDGenerateParams,
@@ -125,7 +145,22 @@ export type {
   ModelCapability,
   ModelSurface,
   ModelPricing,
+  ModelPricingTier,
+  CurvetPricing,
+  OpenRouterPricing,
+  OpenAIModel,
+  OpenAIModelList,
   RateLimits,
   KnownModelId,
   ModelId,
 } from "./types/models";
+export type {
+  StepError,
+  StepErrorCode,
+  StepErrorScope,
+  StepErrorAction,
+  ApiErrorCode,
+  IdempotencyErrorCode,
+  CurvetErrorCode,
+  CurvetErrorType,
+} from "./types/errors";

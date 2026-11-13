@@ -16,15 +16,41 @@ export interface WorkflowRunParams {
   includeFullState?: boolean;
 }
 
-/** Result of a synchronous `run()` call. */
+/**
+ * Result of a synchronous `run()` call: the finished run.
+ *
+ * **Check `success`.** A run in which a step failed but the run still finished
+ * answers HTTP 200 with `success: false` and the failures in `nodeErrors` —
+ * `run()` returns it rather than throwing, because the other steps' outputs
+ * (and charges) are real. A run that stopped altogether throws.
+ */
 export interface WorkflowRunResult {
+  /** false when any step failed (`nodeErrors` is not empty), even though the call returned. */
   success: boolean;
+  runId?: string;
+  /**
+   * The values of the workflow's output steps, keyed by output name;
+   * `{ output: <last step's value> }` when it has none.
+   */
+  outputs?: Record<string, unknown>;
+  /** Every step's value keyed by step label (or id). Absent when `includeFullState` was false. */
+  fullState?: Record<string, unknown>;
+  /** Every step's value keyed by step id. */
+  nodeStateById?: Record<string, unknown>;
+  /** Step id → error text, for the steps that failed. Empty on a fully successful run. */
+  nodeErrors?: Record<string, string>;
   [key: string]: unknown;
 }
 
+/**
+ * Where an async run is. `"waiting"` means it is parked at a Review step until
+ * someone approves it (see {@link WorkflowRun.waitingOn}); it is not terminal,
+ * so `runAndPoll` keeps polling until the run resumes or its timeout passes.
+ */
 export type WorkflowRunStatus =
   | "queued"
   | "running"
+  | "waiting"
   | "completed"
   | "failed"
   | "stopped";
@@ -33,8 +59,20 @@ export interface WorkflowRunNode {
   nodeId: string;
   nodeLabel?: string;
   nodeType?: string;
+  /** "completed" | "failed" | "skipped". */
   status?: string;
+  /** Milliseconds. */
   executionTime?: number;
+}
+
+/** The Review step a `"waiting"` run is parked at. */
+export interface WorkflowRunWaitingOn {
+  nodeId?: string;
+  nodeLabel?: string;
+  kind?: "review" | (string & {});
+  /** ISO 8601. */
+  since?: string;
+  preview?: string;
 }
 
 /** Normalized status of an async (pollable) workflow run. */
@@ -46,12 +84,16 @@ export interface WorkflowRun {
   completedNodeCount?: number;
   /** The node currently executing (null when finished/queued). */
   currentNode?: { id: string; label?: string; type?: string } | null;
+  /** Only while `status` is `"waiting"`: the Review step the run is parked at. */
+  waitingOn?: WorkflowRunWaitingOn;
   nodesExecuted?: WorkflowRunNode[];
   /** Final outputs (present once completed). */
   result?: unknown;
   error?: string | null;
   startTime?: string;
   endTime?: string;
+  /** Milliseconds; absent until the run ends. */
+  executionTime?: number;
   /** Raw, unnormalized response body. */
   raw: unknown;
 }
@@ -59,7 +101,8 @@ export interface WorkflowRun {
 /** A workflow as it appears in a listing (no node graph — see `retrieve`). */
 export interface WorkflowSummary {
   id: string;
-  title: string;
+  /** The server can omit it (a workflow saved without a title); older SDK versions typed it as always present. */
+  title?: string;
   description: string | null;
   /** Number of nodes in the graph. The graph itself is never sent in a listing. */
   nodeCount: number;
@@ -100,6 +143,8 @@ export interface WorkflowListParams {
 export interface WorkflowSubmitResult {
   runId: string;
   status: WorkflowRunStatus;
+  /** The run's status path on the server (`/api/v1/playground/workflows/runs/<id>`), not a full URL. */
+  statusUrl?: string;
   raw: unknown;
 }
 
@@ -122,11 +167,13 @@ function normalizeRun(body: unknown): WorkflowRun {
     totalNodes: b.totalNodes,
     completedNodeCount: b.completedNodeCount,
     currentNode: b.currentNode ?? null,
+    waitingOn: b.waitingOn,
     nodesExecuted: b.nodesExecuted,
     result: b.result,
     error: b.error ?? null,
     startTime: b.startTime,
     endTime: b.endTime,
+    executionTime: b.executionTime,
     raw: body,
   };
 }
@@ -211,6 +258,9 @@ export class Workflows {
    * Execute a workflow synchronously (blocks until it finishes). Best for short
    * workflows; for long ones (video/audio/3D nodes) prefer `runAndPoll`.
    * Sends JSON, or multipart/form-data when file inputs are provided.
+   *
+   * Resolves even when a step failed: check `result.success` and
+   * `result.nodeErrors` (see {@link WorkflowRunResult}).
    */
   async run(
     id: string,
@@ -242,7 +292,7 @@ export class Workflows {
       body: buildBody(params, { async: true }),
       options: reqOptions,
     });
-    return { runId: res?.runId, status: res?.status ?? "running", raw: res };
+    return { runId: res?.runId, status: res?.status ?? "running", statusUrl: res?.statusUrl, raw: res };
   }
 
   /**

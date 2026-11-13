@@ -5,6 +5,191 @@ All notable changes to `@curvet/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Follows the server's final November description: `ApiErrorCode` names the
+  codes added for the chat, image and media routes' own refusals and for the
+  server's own answers (`balance_held`, `messages_required`, `prompt_required`,
+  `model_unknown`, `workflow_run_stopped` and others). `balance_held` is a 429
+  the SDK retries after the server's short `Retry-After`: the balance is held by
+  the caller's own calls in progress. A finished media reply's
+  `usage.remainingBalance` can now be `null` (the balance could not be read in
+  time); it was typed as a number.
+- A refusal whose `Retry-After` is longer than 30 seconds (an exhausted hourly
+  limit, daily cost cap or budget) is no longer retried: the error is thrown at
+  once with `retryAfterMs` on it. Before, the SDK slept 30 seconds per retry and
+  was refused again each time, so such a call took about a minute to fail.
+- Every POST now sends an `Idempotency-Key` header: one UUID per call, re-sent
+  on every retry of that call, so a retried call that finished on the server is
+  answered with its first reply instead of being run and charged again. Pass
+  your own with `options.idempotencyKey` (or an `Idempotency-Key` header) to make
+  a call safe to repeat across processes.
+- When the server answers `409 idempotency_key_in_use` (the first attempt is
+  still running), the SDK keeps asking with the same key, honouring
+  `Retry-After`, for up to `idempotencyWaitMs` (new option, default 120000; 0
+  turns it off; the caller's `signal` stops it) instead of spending
+  `maxRetries` on it. A timeout on the SDK's side is retried under
+  `maxRetries`, as before (`maxRetries: 0` is one send). On image, media and
+  workflow routes, which keep working after the SDK hangs up, the retry gets
+  that 409 and then the first attempt's result: there a call slightly slower
+  than `timeout` now returns its result instead of failing after it was
+  charged. Chat and embeddings refund and free the key when the SDK hangs up,
+  so their retry is a fresh call to the model.
+- Every error a POST throws carries `err.idempotencyKey`, and replies with a
+  `metadata` block carry `metadata.idempotencyKey`: retry with it to get the
+  result of a call that completed after the SDK gave up.
+- Not every repeat can be answered with the first reply. A reply that was
+  streamed, is over 1 MB, comes from embeddings, or belongs to an account whose
+  content settings do not allow storing replies is not kept: a repeat gets
+  `409 idempotency_key_not_replayable` (not run or charged again, and the reply
+  cannot be fetched again). A reply that only acknowledges work — a media job's
+  `202` + `jobId`, an async workflow run's `202` + `runId` — is always kept and
+  replayed, whatever the content settings. A failed call frees its key, so a
+  repeat runs again;
+  a failed SYNCHRONOUS workflow run is the exception to "charged once" — its
+  earlier steps stay charged and a repeat runs (and charges) the whole workflow
+  again. Use `workflows.submit` / `runAndPoll` where that matters.
+- Errors read the request id from `x-curvet-request-id`, which is what the
+  server sends; `x-request-id` is the fallback. Previously `err.requestId` was
+  empty for most errors.
+
+### Types and errors match the server
+
+The server now publishes a machine-readable description of its API
+(`openapi.json`, built from the JSON Schemas of what the routes return). The
+SDK's hand-written types had drifted from it; this brings them in line. Nothing
+exported is removed or renamed, and no call throws where it returned before.
+
+- **Errors carry what the server sent.** Every thrown error now has `code`,
+  `type`, `retryable`, and — for a model or provider failure — `provider`,
+  `model`, `providerStatus` and the structured `stepError`; `jobId` on a failed
+  media job, `runId` on a failed workflow run, `param` when the server names
+  the field; `requestId` also from the body; `retryAfterMs` from `Retry-After`
+  (or the StepError's `retryAfterSec`, or the per-IP refusal's `retryAfter`) on
+  any error, not only 429s. Both error envelopes are read: the playground's
+  `{ success: false, error, … }` and the OpenAI-style
+  `{ error: { message, type, code, param, …, limit } }`.
+- **Error codes as types.** Current servers send a stable `code` on every
+  refusal. `ApiErrorCode` lists the auth, policy, limit, lookup and server
+  codes (`invalid_api_key`, `model_not_allowed`, `rate_limit_exceeded`,
+  `route_not_found`, `body_too_large`, …); `CurvetErrorCode` joins them with
+  `StepErrorCode`, `IdempotencyErrorCode` and the routes' own;
+  `CurvetErrorType` lists the `type` values (now including
+  `authentication_error` and `permission_error`). Each also accepts any other
+  string, so a code added later still compiles. `err.code` and `err.type` are
+  typed with them.
+- **New error classes** for statuses that had none: `ConflictError` (409),
+  `GoneError` (410, model retired), `PayloadTooLargeError` (413),
+  `UnprocessableEntityError` (422, content policy / key mismatch) and
+  `FailedDependencyError` (424). Each extends `APIError`, which those statuses
+  mapped to before, so `instanceof APIError` still holds for them. `APIError`'s
+  docs no longer claim it is only 5xx.
+- `InsufficientBalanceError.requiredCredits` (402 on `/audio`).
+  `RateLimitError` reads the credit budget refusal (`kind: "budget"`, with
+  `scope` and `period`) and the reset time the server sends now (`resetsAt`),
+  from either envelope (the OpenAI-style `error.limit` too); `resetsIn`, which
+  older servers sent, is still read. The key's own 429s now come with
+  `Retry-After`, which becomes `retryAfterMs`.
+- A synchronous `workflows.run()` that stops on a failing step now throws that
+  step's error with its own status (the server's change: a 402
+  `insufficient_credits` is an `InsufficientBalanceError`, a 502
+  `provider_down` an `APIError`, …), carrying `runId`. A malformed workflow or
+  run id is a `NotFoundError`.
+- **Retries follow the server.** When an error body says `retryable`, the SDK
+  retries exactly when it is true (waiting what `Retry-After` says, capped at
+  30 s). A `503 provider_unavailable` — our account at the provider — is no
+  longer retried pointlessly. When the body does not say, the old rule stands
+  (429 and 5xx).
+- **Chat.** Request: `allowFallbacks`, `responseFormat`, `topP`, `stop`, `seed`,
+  `frequencyPenalty`, `presencePenalty`, `reasoningEffort`, `imageUrl`,
+  `images`, and message `content` as an array of text and image blocks
+  (`ChatContentMessage`, `ChatContentPart`). Reply: `finishReason`,
+  `usage.promptTokens` / `completionTokens` / `totalTokens` / `billing`
+  (`ChatUsage`), and `metadata.servedModel` (with `allowFallbacks`, the model
+  that answered when it was not the one asked for). The `maxTokens` doc no
+  longer says it defaults to 1000: without it a token-billed call gets the
+  provider's own limit. An empty answer is documented: a charged 200 only when
+  the request explains it (`finishReason` `"length"`, or `"stop"` with stop
+  sequences), otherwise a 502 `no_output`.
+- **`usage.remainingCredits`** on chat, image and media replies: the credits
+  the owner can still spend, the same figure on all three (null when the
+  balance could not be read).
+- **Image.** `image` (a source URL or `data:` URI) and `files` (uploaded as
+  multipart).
+- **Media and jobs.** `JobStatus` gains `"queued"` (not terminal: polling
+  continues). A media job carries `outputMetadata` (the provider's duration,
+  resolution, … — previously dropped), `thumbnailUrl`, `stepError`,
+  `faultKind`, `faultRetryable`, `type`, `model`, `pollCount`, `createdAt`,
+  `updatedAt`, and on a 202 `message`, `statusUrl` and `estimatedWaitTime`;
+  `usage.parts` (`MediaUsage`) for audio spoken in parts. A `JobFailedError`
+  carries the job's `stepError`, `code`, `retryable`, `provider` and `model`.
+- **A finished media reply whose URL is null** (the job ended without an
+  output) is now `status: "completed"` with no `mediaUrl`, instead of
+  `"processing"` — `generate()` no longer polls the job once more to find out.
+  The reply's own `mediaUrl` (current servers send it beside
+  `videoUrl` / `audioUrl` / `modelUrl`) is read too.
+- **Models.** `ModelInfo` gains `aliases`, `group`, `baseModel`,
+  `maxOutputTokens`, `unavailableReason`, `healthStatus`, `dims`,
+  `supportsDimensions`, `maxInputTokens`; `ModelPricing.billing` gains
+  `"flat_per_request"` (what the server sends; `"flat"` stays in the union),
+  plus `tiers` and `minimum_per_request`; `ModelCapability` gains `"music"` and
+  `"embedding"`, `ModelType` gains `"embedding"`. `RateLimits.enabled` says
+  whether the key's limits are enforced. New types for the OpenAI-style model
+  list: `OpenAIModelList`, `OpenAIModel`, `OpenRouterPricing`, `CurvetPricing`.
+- **Balance.** `breakdown` gains `walletUSD`, `pointsAsUSD`, `earnedCredits`,
+  `creditModel`, `creditLimit` and `creditLimitRemaining`.
+  `personalSpendable` is deprecated: the server never sends it.
+- **Analytics.** The result now carries the reply's `app` (`{ name, appKey }`),
+  which was dropped. The flat `totalRequests` / `totalCost` /
+  `requestsByModel` / `requestsByCategory` fields are documented as never
+  returned (kept, deprecated).
+- **Workflows.** `WorkflowRunResult` is typed (`runId`, `outputs`, `fullState`,
+  `nodeStateById`, `nodeErrors`). **Check `success`:** a synchronous run in
+  which a step failed but the run finished comes back with `success: false` —
+  `run()` returns it, as before, rather than throwing. Run status gains
+  `"waiting"` (parked at a Review step) with `waitingOn`, and `executionTime`;
+  `submit()` returns `statusUrl`.
+- A contract test (`test/contract.test.ts`) checks the SDK against a copy of
+  the server's `openapi.json`: a field the server documents and the SDK drops,
+  or does not declare, fails it.
+
+### Corrected types you may notice
+
+These types claimed something the server does not guarantee. Code that relied
+on the wrong claim may need a guard when it next compiles; nothing changes at
+runtime unless stated.
+
+- `ChatResponse.metadata.requestId` and `ImageResponse.metadata.requestId` are
+  optional: the server can omit them.
+- `WorkflowSummary.title` (and so `WorkflowDetail.title`) is optional: a
+  workflow saved without a title has none.
+- `JobCost.estimated` and `JobCost.reserved` are required (the server always
+  sends them), `JobCost.actual` can be null (until the job settles), and
+  `MediaJob.eta` can be null. Only code that builds its own `JobCost` objects
+  can notice the first.
+- `AnalyticsOverview.avgCostPerRequest`, `AnalyticsBreakdownRow.avgCostPerRequest`
+  and `AnalyticsBreakdownRow.category` can be null.
+- `JobStatus`, `WorkflowRunStatus` and `RateLimitError.kind` have new members
+  (`"queued"`, `"waiting"`, `"budget"`); an exhaustive `switch` over them will
+  ask for the new case. At runtime, a budget refusal now reads
+  `kind: "budget"` (it read `"rate"` before), and the cost cap's
+  `RateLimitError.used` is a number as typed (it was the server's string, e.g.
+  `"10.0000"`).
+- `ChatCreateParams.messages` items may be a `ChatContentMessage`, whose
+  `content` is a string or an array of blocks. `ChatMessage` itself is
+  unchanged; only code that reads `.content` back out of its own
+  `ChatCreateParams` object as a string needs a guard.
+- `PollOptions.onProgress` receives `undefined`, not `null`, for an unknown ETA
+  (its type always said `string | undefined`).
+- `err.code` and `err.type` are typed `CurvetErrorCode` / `CurvetErrorType`
+  instead of `string`. Both accept any string, so reading or comparing them
+  compiles as before; only a subclass of `CurvetError` that redeclares `code`
+  with a non-string type would notice.
+- Not narrowed in this release: `ChatResponse.response` stays `string`,
+  although the server's schema still allows null. Making it `string | null`
+  would stop `res.response.trim()` compiling everywhere; it is documented on
+  the field instead.
+
 ## 0.13.0
 
 - `agency` now addresses the server with whichever credential the client holds:

@@ -15,32 +15,40 @@ export interface AnalyticsParams extends RequestOptions {
  */
 export interface AnalyticsBreakdownRow {
   _id: string | null;
-  /** Total USD spent by this group. */
+  /** Total spent by this group, in the usage records' unit. */
   totalCost?: number;
   /** Request count. Status and error breakdowns use `count` instead. */
   requestCount?: number;
   count?: number;
-  avgCostPerRequest?: number;
+  /** On the category breakdown; null when it could not be computed. */
+  avgCostPerRequest?: number | null;
   /** Mean latency in ms; null when no row in the group recorded one. */
   avgLatency?: number | null;
-  /** Model type, present on the model breakdown. */
-  category?: string;
+  /** Model type, on the model breakdown; null when the records lack one. */
+  category?: string | null;
   [key: string]: unknown;
 }
 
 export interface AnalyticsOverview {
+  /** The aggregation's group key: null, present when there was any usage. */
+  _id?: null;
   totalCost?: number;
   totalRequests?: number;
-  avgCostPerRequest?: number;
+  avgCostPerRequest?: number | null;
   avgLatency?: number | null;
   [key: string]: unknown;
 }
 
+/** The app the key belongs to, as `/analytics` reports it. */
+export interface AnalyticsApp {
+  name: string;
+  /** The app's legacy appKey, in full; null when it has none. */
+  appKey: string | null;
+}
+
 /**
- * Usage analytics as `/analytics` actually returns them: an overview plus four
- * aggregate breakdowns. Every field is optional because a deployment may add or
- * omit a breakdown, and the flat `totalRequests` / `requestsByModel` keys are
- * retained for the older, flatter shape some deployments still return.
+ * Usage analytics as `/analytics` returns them: an overview plus four aggregate
+ * breakdowns, and the `app` they belong to.
  */
 export interface AnalyticsResult {
   overview?: AnalyticsOverview;
@@ -52,13 +60,18 @@ export interface AnalyticsResult {
   statusBreakdown?: AnalyticsBreakdownRow[];
   /** Failure counts by error code. */
   errorBreakdown?: AnalyticsBreakdownRow[];
-  /** @deprecated Older flat shape; prefer `overview.totalRequests`. */
+  /**
+   * The app these numbers belong to. Sent beside `analytics` in the reply;
+   * the SDK puts it here.
+   */
+  app?: AnalyticsApp;
+  /** @deprecated Never returned by the server; always undefined. Read `overview.totalRequests`. */
   totalRequests?: number;
-  /** @deprecated Older flat shape; prefer `overview.totalCost`. */
+  /** @deprecated Never returned by the server; always undefined. Read `overview.totalCost`. */
   totalCost?: number;
-  /** @deprecated Older flat shape; prefer `modelBreakdown`. */
+  /** @deprecated Never returned by the server; always undefined. Read `modelBreakdown`. */
   requestsByModel?: Record<string, number>;
-  /** @deprecated Older flat shape; prefer `categoryBreakdown`. */
+  /** @deprecated Never returned by the server; always undefined. Read `categoryBreakdown`. */
   requestsByCategory?: Record<string, number>;
   [key: string]: unknown;
 }
@@ -69,12 +82,21 @@ export class Analytics {
   /** Usage analytics for the app, optionally bounded by a date range. */
   async get(params: AnalyticsParams = {}): Promise<AnalyticsResult> {
     const { startDate, endDate, ...options } = params;
-    const body = await this.client.request<{ success: boolean; analytics: AnalyticsResult }>({
+    const body = await this.client.request<{
+      success: boolean;
+      analytics: AnalyticsResult;
+      app?: AnalyticsApp;
+    }>({
       method: "GET",
       path: "/analytics",
       query: { startDate, endDate },
       options,
     });
-    return body.analytics;
+    const analytics = body.analytics;
+    // `app` arrives beside `analytics`; carry it on the result rather than drop it.
+    if (analytics && typeof analytics === "object" && body.app !== undefined && analytics.app === undefined) {
+      return { ...analytics, app: body.app };
+    }
+    return analytics;
   }
 }

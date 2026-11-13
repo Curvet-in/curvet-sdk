@@ -2,10 +2,24 @@ import type { FetchLike, RequestOptions } from "../types/common";
 import {
   CurvetError,
   ConnectionError,
-  RateLimitError,
   errorFromResponse,
+  retryAfterHeaderMs,
 } from "./errors";
-import { fullJitterBackoff, isRetryableStatus, sleep } from "./retry";
+import { fullJitterBackoff, isIdempotencyInProgress, shouldRetry, sleep } from "./retry";
+
+const IDEMPOTENCY_HEADER = "idempotency-key";
+
+/**
+ * How long a POST keeps asking with its key after a 409
+ * `idempotency_key_in_use` (the first attempt is still running on the server),
+ * by default: long enough for a slow image (60–90 s) or a short job to finish,
+ * short enough not to hang a caller for many minutes. A timeout on the SDK's
+ * side does not start this wait; it is retried under `maxRetries`.
+ */
+export const DEFAULT_IDEMPOTENCY_WAIT_MS = 120_000;
+
+/** Pause between asks while the server says the call is still running, when it gives no Retry-After. */
+const IN_PROGRESS_PAUSE_MS = 1_000;
 
 export interface HttpClientOptions {
   appKey: string;
@@ -15,6 +29,8 @@ export interface HttpClientOptions {
   fetch: FetchLike;
   /** Header carrying the credential (default "x-app-key"; enterprise uses "x-enterprise-key"). */
   authHeaderName?: string;
+  /** See {@link DEFAULT_IDEMPOTENCY_WAIT_MS}; 0 turns the wait off. */
+  idempotencyWaitMs?: number;
 }
 
 export interface RequestArgs {
@@ -29,6 +45,9 @@ export interface RequestArgs {
  * The single place that knows about fetch, headers, base URL, error mapping,
  * and retries. Resources call `request()`; everything else stays mockable.
  */
+/** The longest one sleep between retries may last, whatever the server asked for. */
+const MAX_SERVER_WAIT_MS = 30000;
+
 export class HttpClient {
   constructor(private opts: HttpClientOptions) {}
 
@@ -43,6 +62,17 @@ export class HttpClient {
       accept: "application/json",
       ...(options?.headers ?? {}),
     };
+    // One key per logical POST, set once here — outside the retry loop — so
+    // every retry of this call carries the same key and the server runs (and
+    // charges) it once. The caller's own key wins: `options.idempotencyKey`,
+    // or an Idempotency-Key header they passed.
+    let idempotencyKey: string | undefined;
+    if (method.toUpperCase() === "POST") {
+      const passed = Object.keys(headers).find((h) => h.toLowerCase() === IDEMPOTENCY_HEADER);
+      idempotencyKey = options?.idempotencyKey || (passed ? headers[passed] : "") || newIdempotencyKey();
+      if (passed) delete headers[passed];
+      headers[IDEMPOTENCY_HEADER] = idempotencyKey;
+    }
     let payload: string | FormData | undefined;
     if (body !== undefined) {
       if (typeof FormData !== "undefined" && body instanceof FormData) {
@@ -54,9 +84,54 @@ export class HttpClient {
       }
     }
 
+    try {
+      const result = await this.send<T>({ url, method, headers, payload, options, maxRetries, timeout, idempotencyKey });
+      // Where the reply has a metadata block, the key goes in it: the call can
+      // be asked for again, with the same key, for 24 hours.
+      if (idempotencyKey) {
+        const meta = (result as any)?.metadata;
+        if (meta && typeof meta === "object" && !Array.isArray(meta)) meta.idempotencyKey = idempotencyKey;
+      }
+      return result;
+    } catch (e: any) {
+      // Every error this call throws carries its key, so the caller can retry
+      // with it and get the result of a call that completed after we gave up.
+      if (idempotencyKey && e && typeof e === "object") e.idempotencyKey = idempotencyKey;
+      throw e;
+    }
+  }
+
+  private async send<T>(a: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    payload: string | FormData | undefined;
+    options?: RequestOptions;
+    maxRetries: number;
+    timeout: number;
+    idempotencyKey?: string;
+  }): Promise<T> {
+    const { url, method, headers, payload, options, maxRetries, timeout, idempotencyKey } = a;
+    const signalOf = options?.signal;
+
+    // After a "still running" answer (409 idempotency_key_in_use), a keyed POST
+    // keeps asking with the same key until this deadline instead of spending
+    // maxRetries: the server either answers the first attempt's result (a
+    // replay), says it is still running, or — when that attempt failed and was
+    // refunded — runs it once more. Only the 409 starts this wait; a timeout of
+    // our own is retried under maxRetries (below).
+    const waitMs = options?.idempotencyWaitMs ?? this.opts.idempotencyWaitMs ?? DEFAULT_IDEMPOTENCY_WAIT_MS;
+    let waitUntil: number | undefined;
+    const mayKeepAsking = (): boolean => {
+      if (!idempotencyKey || !(waitMs > 0)) return false;
+      if (waitUntil === undefined) waitUntil = Date.now() + waitMs;
+      return Date.now() < waitUntil;
+    };
+    const untilDeadline = (ms: number) => Math.max(0, Math.min(ms, (waitUntil ?? Date.now()) - Date.now()));
+
     let attempt = 0;
     for (;;) {
-      const { signal, done } = this.makeSignal(timeout, options?.signal);
+      const { signal, done } = this.makeSignal(timeout, signalOf);
       try {
         const res = await this.opts.fetch(url, { method, headers, body: payload, signal });
         const text = await res.text();
@@ -64,14 +139,35 @@ export class HttpClient {
 
         if (res.ok) return parsed as T;
 
+        // The server sends its id as x-curvet-request-id; x-request-id is
+        // what older servers (and proxies) send.
         const requestId =
+          res.headers.get("x-curvet-request-id") ??
           res.headers.get("x-request-id") ??
           (parsed as any)?.metadata?.requestId ??
           undefined;
         const err = errorFromResponse(res.status, parsed, requestId, res.headers);
 
-        if (isRetryableStatus(res.status) && attempt < maxRetries) {
-          await this.backoff(err, attempt, options?.signal);
+        if (isIdempotencyInProgress(res.status, parsed)) {
+          if (mayKeepAsking()) {
+            await sleep(untilDeadline(retryAfterHeaderMs(res.headers) ?? IN_PROGRESS_PAUSE_MS), signalOf);
+            continue;
+          }
+          // The wait is off (no key, or idempotencyWaitMs 0): an ordinary retry.
+          if (!(waitMs > 0) && attempt < maxRetries) {
+            await this.backoff(err, attempt, signalOf, retryAfterHeaderMs(res.headers));
+            attempt++;
+            continue;
+          }
+          throw err;
+        }
+        // The server said when to come back (Retry-After, a limit's reset). When
+        // that is further away than one sleep here may last, a retry after the
+        // shorter sleep can only be refused again: give the caller the error
+        // now, with retryAfterMs on it, instead of sleeping twice for nothing.
+        const waitsTooLong = err.retryAfterMs != null && err.retryAfterMs > MAX_SERVER_WAIT_MS;
+        if (shouldRetry(res.status, err.retryable) && attempt < maxRetries && !waitsTooLong) {
+          await this.backoff(err, attempt, signalOf);
           attempt++;
           continue;
         }
@@ -80,9 +176,16 @@ export class HttpClient {
         if (e instanceof CurvetError) throw e;
         // AbortError: distinguish user-abort (rethrow) from our timeout (retry/ConnectionError).
         if (e?.name === "AbortError") {
-          if (options?.signal?.aborted) throw e;
+          if (signalOf?.aborted) throw e;
+          // Our timeout: an ordinary retry, counted against maxRetries
+          // (maxRetries 0 = one send). It goes with the same key, so for image,
+          // media and workflow routes — where the server keeps working after we
+          // hang up — the retry gets 409 idempotency_key_in_use and the wait
+          // above takes over until the first attempt's result. Chat and
+          // embeddings refund and free the key when we hang up, so there a
+          // re-send is a fresh provider call; never loop on those.
           if (attempt < maxRetries) {
-            await this.backoff(undefined, attempt, options?.signal);
+            await this.backoff(undefined, attempt, signalOf);
             attempt++;
             continue;
           }
@@ -90,7 +193,7 @@ export class HttpClient {
         }
         // Network error before any response — safe to retry.
         if (attempt < maxRetries) {
-          await this.backoff(undefined, attempt, options?.signal);
+          await this.backoff(undefined, attempt, signalOf);
           attempt++;
           continue;
         }
@@ -101,10 +204,19 @@ export class HttpClient {
     }
   }
 
-  private async backoff(err: CurvetError | undefined, attempt: number, signal?: AbortSignal) {
+  private async backoff(
+    err: CurvetError | undefined,
+    attempt: number,
+    signal?: AbortSignal,
+    waitMs?: number,
+  ) {
     let delay = fullJitterBackoff(attempt);
-    if (err instanceof RateLimitError && err.retryAfterMs != null) {
-      delay = Math.min(err.retryAfterMs, 30000);
+    // The server's own wait (Retry-After, a StepError's retryAfterSec, a rate
+    // limit's reset), capped so one answer cannot park the caller for long.
+    if (err?.retryAfterMs != null) {
+      delay = Math.min(err.retryAfterMs, MAX_SERVER_WAIT_MS);
+    } else if (waitMs != null) {
+      delay = Math.min(waitMs, MAX_SERVER_WAIT_MS);
     }
     await sleep(delay, signal);
   }
@@ -139,6 +251,24 @@ export class HttpClient {
       },
     };
   }
+}
+
+/**
+ * A fresh Idempotency-Key: a v4 UUID. `crypto.randomUUID` where the runtime has
+ * it (Node 19+, browsers, Deno, Bun); otherwise built from `getRandomValues`, or
+ * from Math.random as a last resort (Node 18 has no global crypto) — a key only
+ * has to be unique among one app's calls to one route within a day.
+ */
+export function newIdempotencyKey(): string {
+  const c: any = (globalThis as any).crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function safeJson(text: string): unknown {
