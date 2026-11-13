@@ -40,6 +40,13 @@ export interface CurvetOptions {
   timeout?: number;
   /** Max automatic retries for 429/5xx and network errors (default 2). */
   maxRetries?: number;
+  /**
+   * After a POST times out, or the server says the same call is still running
+   * (409 `idempotency_key_in_use`), keep asking with the same Idempotency-Key
+   * for up to this many ms, so a call slightly slower than `timeout` returns
+   * its result instead of failing (default 120000; 0 turns it off).
+   */
+  idempotencyWaitMs?: number;
   /** Inject a fetch implementation (defaults to global fetch on Node 18+). */
   fetch?: FetchLike;
   /** Default poll interval for async media jobs, in ms (default 2500). */
@@ -111,6 +118,7 @@ export class Curvet {
     const shared = {
       timeout: options.timeout ?? 60_000,
       maxRetries: options.maxRetries ?? 2,
+      idempotencyWaitMs: options.idempotencyWaitMs,
       fetch: fetchImpl,
     };
     // Playground/v1 resources authenticate with the app key.

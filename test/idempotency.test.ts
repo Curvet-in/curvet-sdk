@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { Curvet, APIError, BadRequestError } from "../src";
-import { newIdempotencyKey } from "../src/core/http";
+import { Curvet, APIError, BadRequestError, ConnectionError } from "../src";
+import { DEFAULT_IDEMPOTENCY_WAIT_MS, newIdempotencyKey } from "../src/core/http";
 import { isIdempotencyInProgress } from "../src/core/retry";
 import { mockFetch } from "./helpers";
 
@@ -175,5 +175,118 @@ describe("request id on errors", () => {
     const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0 });
     const err = await curvet.chat.create(params).catch((e) => e);
     expect(err.requestId).toBe("older-1");
+  });
+});
+
+/** A reply that never comes until the SDK's own timeout aborts it. */
+function hang(init: any): Promise<never> {
+  return new Promise((_, reject) =>
+    init.signal.addEventListener("abort", () => {
+      const e = new Error("aborted");
+      e.name = "AbortError";
+      reject(e);
+    }),
+  );
+}
+const inUse = {
+  status: 409,
+  body: { success: false, error: "still running", code: "idempotency_key_in_use" },
+  headers: { "retry-after": "0" },
+};
+
+describe("waiting for a call the server is still running", () => {
+  it("a call slower than the timeout: keeps asking with the same key until the result arrives, maxRetries untouched", async () => {
+    // Attempt 1 times out (the image takes longer than `timeout`); the server is
+    // still running it for the next two asks, then answers its result.
+    let n = 0;
+    const fetch = mockFetch(async (_url, init) => {
+      n++;
+      if (n === 1) return hang(init);
+      if (n <= 3) return inUse;
+      return chatOk;
+    });
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0, timeout: 20, idempotencyWaitMs: 5_000 });
+    const res = await curvet.chat.create(params);
+    expect(res.response).toBe("pong");
+    expect(fetch.calls).toHaveLength(4);
+    expect(new Set(fetch.calls.map(keyOf)).size).toBe(1);
+    expect(res.metadata.idempotencyKey).toBe(keyOf(fetch.calls[0]));
+  });
+
+  it("gives up at the deadline, and the error carries the key to retry with", async () => {
+    const fetch = mockFetch(() => inUse);
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 5, idempotencyWaitMs: 60 });
+    const started = Date.now();
+    const err = await curvet.chat.create(params).catch((e) => e);
+    expect(err).toBeInstanceOf(APIError);
+    expect(err.status).toBe(409);
+    expect(err.idempotencyKey).toBe(keyOf(fetch.calls[0]));
+    expect(fetch.calls.length).toBeGreaterThan(1);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("a timeout past the deadline is a ConnectionError that carries the key", async () => {
+    const fetch = mockFetch(async (_url, init) => hang(init));
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0, timeout: 20, idempotencyWaitMs: 50 });
+    const err = await curvet.chat.create(params).catch((e) => e);
+    expect(err).toBeInstanceOf(ConnectionError);
+    expect(err.idempotencyKey).toBe(keyOf(fetch.calls[0]));
+    expect(new Set(fetch.calls.map(keyOf)).size).toBe(1);
+  });
+
+  it("the caller's AbortSignal stops the wait at once", async () => {
+    const controller = new AbortController();
+    const fetch = mockFetch(() => {
+      setTimeout(() => controller.abort(), 10);
+      return { ...inUse, headers: { "retry-after": "30" } };
+    });
+    const curvet = new Curvet({ appKey: "k", fetch, idempotencyWaitMs: 60_000 });
+    const started = Date.now();
+    const err = await curvet.chat.create(params, { signal: controller.signal }).catch((e) => e);
+    expect(err?.name).toBe("AbortError");
+    expect(err.idempotencyKey).toBe(keyOf(fetch.calls[0]));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("idempotencyWaitMs: 0 turns the wait off: a 409 in_use is an ordinary retry under maxRetries", async () => {
+    const fetch = mockFetch(() => inUse);
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0 });
+    const err = await curvet.chat.create(params, { idempotencyWaitMs: 0 }).catch((e) => e);
+    expect(err.status).toBe(409);
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("the default wait covers a slow image without hanging for many minutes", () => {
+    expect(DEFAULT_IDEMPOTENCY_WAIT_MS).toBeGreaterThanOrEqual(90_000);
+    expect(DEFAULT_IDEMPOTENCY_WAIT_MS).toBeLessThanOrEqual(5 * 60_000);
+  });
+});
+
+describe("the key is handed back", () => {
+  it("on every error a POST throws", async () => {
+    const fetch = mockFetch(() => ({ status: 400, body: { success: false, error: "bad" } }));
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0 });
+    const err = await curvet.chat.create(params).catch((e) => e);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.idempotencyKey).toMatch(UUID);
+    expect(err.idempotencyKey).toBe(keyOf(fetch.calls[0]));
+  });
+
+  it("not on a GET, which has none", async () => {
+    const fetch = mockFetch(() => ({ status: 400, body: { success: false, error: "bad" } }));
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0 });
+    const err = await curvet.balance.get().catch((e) => e);
+    expect(err.idempotencyKey).toBeUndefined();
+  });
+
+  it("so the caller's own retry can reuse it and get the first result", async () => {
+    let n = 0;
+    const fetch = mockFetch(() => (++n === 1 ? { status: 503, body: { success: false, error: "busy" } } : chatOk));
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0 });
+    const err = await curvet.chat.create(params).catch((e) => e);
+    const res = await curvet.chat.create(params, { idempotencyKey: err.idempotencyKey });
+    expect(keyOf(fetch.calls[1])).toBe(keyOf(fetch.calls[0]));
+    expect(res.metadata.idempotencyKey).toBe(err.idempotencyKey);
   });
 });

@@ -9,6 +9,13 @@ export class CurvetError extends Error {
   readonly status?: number;
   readonly requestId?: string;
   readonly raw?: unknown;
+  /**
+   * The `Idempotency-Key` this call was sent with (POSTs only). The call may
+   * still have completed — and been charged — on the server: retry with
+   * `{ idempotencyKey: err.idempotencyKey }` to get its result instead of
+   * running it again.
+   */
+  idempotencyKey?: string;
 
   constructor(message: string, opts: CurvetErrorOptions = {}) {
     super(message);

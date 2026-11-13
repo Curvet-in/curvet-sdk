@@ -344,7 +344,21 @@ try {
 
 ### Idempotency
 
-Every POST carries an `Idempotency-Key` (a UUID generated per call) and every retry of that call re-sends the same key, so a call that timed out and was retried is run and charged once. The server keeps a finished call's reply for 24 hours: a repeat gets that reply (with `Idempotent-Replayed: true`) instead of a second run. A repeat that arrives while the first attempt is still running gets `409 idempotency_key_in_use`, which the SDK retries. Streamed replies are not kept.
+Every POST carries an `Idempotency-Key` (a UUID generated per call), and every retry of that call re-sends the same key. The server remembers a finished call for 24 hours: a repeat with the same key gets the first reply (with `Idempotent-Replayed: true`) instead of a second run and a second charge.
+
+**A call slower than `timeout`.** When a POST times out, or the server answers `409 idempotency_key_in_use` (the first attempt is still running), the SDK keeps asking with the same key — honouring `Retry-After` — for up to `idempotencyWaitMs` (default 120000), instead of spending `maxRetries` on it. A 70-second image with the default 60-second timeout therefore returns its image, charged once. `idempotencyWaitMs: 0` turns the wait off; the caller's `signal` stops it at once.
+
+**The key is handed back.** Every error a POST throws carries `err.idempotencyKey`, and replies with a `metadata` block carry `metadata.idempotencyKey`. If you give up on a call, retry it with that key: you get its result if it completed, rather than paying for it again.
+
+```ts
+try {
+  await curvet.image.generate(params);
+} catch (err) {
+  if (err instanceof CurvetError && err.idempotencyKey) {
+    await curvet.image.generate(params, { idempotencyKey: err.idempotencyKey });
+  }
+}
+```
 
 To make a call safe to repeat across processes or restarts, pass your own key:
 
@@ -352,7 +366,16 @@ To make a call safe to repeat across processes or restarts, pass your own key:
 await curvet.chat.create(params, { idempotencyKey: `order-${orderId}` });
 ```
 
-Reusing a key with a different request is refused with `422 idempotency_key_mismatch`.
+What a repeat with the same key gets when the first call did not simply finish:
+
+| First call | Repeat with the same key |
+|---|---|
+| still running | `409 idempotency_key_in_use` (the SDK waits and asks again) |
+| failed (any 4xx/5xx), or a stream that failed and was refunded | runs again — a failed call is refunded or never charged (but see the workflow exception below) |
+| finished, but its reply was **not kept**: streamed, over 1 MB, embeddings (vectors are never stored), or an account whose content settings do not allow storing replies | `409 idempotency_key_not_replayable` — not run or charged again, and the reply **cannot be fetched again**: for those calls a lost reply is lost |
+| same key, different request | `422 idempotency_key_mismatch` |
+
+**The exception to "charged once":** a synchronous workflow run (`workflows.run`) that fails part-way answers an error while the steps that ran before the failure stay charged. The failure frees the key, so a retry with the same key — yours, or the SDK asking again after a timeout — runs, and charges, the whole workflow again. Use `workflows.submit` / `runAndPoll` (the `runId` reply is kept and replayed) for workflows that must not run twice.
 
 Errors carry the server's request id (`err.requestId`, from `x-curvet-request-id`) — quote it to support.
 
@@ -365,13 +388,14 @@ new Curvet({
   baseURL: "https://curvet.ai/api/v1/playground", // override for staging
   timeout: 60_000,            // per-request, ms
   maxRetries: 2,
+  idempotencyWaitMs: 120_000,  // after a POST times out, keep asking with its key this long
   defaultPollIntervalMs: 2500, // async job polling
   defaultPollTimeoutMs: 180_000,
   fetch: customFetch,          // for Node < 18 / testing
 });
 ```
 
-Per-call overrides: every method accepts a final `options` arg (`{ signal, timeout, maxRetries, headers, idempotencyKey }`; media methods also take `{ pollIntervalMs, pollTimeoutMs, onProgress }`).
+Per-call overrides: every method accepts a final `options` arg (`{ signal, timeout, maxRetries, headers, idempotencyKey, idempotencyWaitMs }`; media methods also take `{ pollIntervalMs, pollTimeoutMs, onProgress }`).
 
 ## Development
 

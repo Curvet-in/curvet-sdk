@@ -25,5 +25,7 @@ export interface ChatResponse {
     model: string;
     latencyMs: number;
     requestId: string;
+    /** The `Idempotency-Key` the call was sent with. */
+    idempotencyKey?: string;
   };
 }

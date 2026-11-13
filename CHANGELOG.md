@@ -8,11 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - Every POST now sends an `Idempotency-Key` header: one UUID per call, re-sent
-  on every retry of that call, so a retried call is run and charged once by the
-  server. Pass your own with `options.idempotencyKey` (or an `Idempotency-Key`
-  header) to make a call safe to repeat across processes.
-- A `409` with code `idempotency_key_in_use` (an earlier attempt of the same
-  call is still running) is retried, honouring `Retry-After`.
+  on every retry of that call, so a retried call that finished on the server is
+  answered with its first reply instead of being run and charged again. Pass
+  your own with `options.idempotencyKey` (or an `Idempotency-Key` header) to make
+  a call safe to repeat across processes.
+- After a POST times out, or the server answers `409 idempotency_key_in_use`
+  (the first attempt is still running), the SDK keeps asking with the same key,
+  honouring `Retry-After`, for up to `idempotencyWaitMs` (new option, default
+  120000; 0 turns it off; the caller's `signal` stops it) instead of spending
+  `maxRetries` on it. A call slightly slower than `timeout` now returns its
+  result instead of failing after it was charged.
+- Every error a POST throws carries `err.idempotencyKey`, and replies with a
+  `metadata` block carry `metadata.idempotencyKey`: retry with it to get the
+  result of a call that completed after the SDK gave up.
+- Not every repeat can be answered with the first reply. A reply that was
+  streamed, is over 1 MB, comes from embeddings, or belongs to an account whose
+  content settings do not allow storing replies is not kept: a repeat gets
+  `409 idempotency_key_not_replayable` (not run or charged again, and the reply
+  cannot be fetched again). A failed call frees its key, so a repeat runs again;
+  a failed SYNCHRONOUS workflow run is the exception to "charged once" — its
+  earlier steps stay charged and a repeat runs (and charges) the whole workflow
+  again. Use `workflows.submit` / `runAndPoll` where that matters.
 - Errors read the request id from `x-curvet-request-id`, which is what the
   server sends; `x-request-id` is the fallback. Previously `err.requestId` was
   empty for most errors.
