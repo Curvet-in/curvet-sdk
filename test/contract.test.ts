@@ -106,6 +106,29 @@ const SUCCESS: Rule = {
 };
 const ERROR_SUCCESS: Rule = { from: "success", to: null, reason: "always false on an error; kept in `err.raw`" };
 const ERROR_TEXT: Rule = { from: "error", to: "message" };
+/** How the OpenAI-style envelope's fields reach the error. */
+const OPENAI_ERROR: Rule[] = [
+  { from: "error", to: null, reason: "the envelope; its fields are mapped below" },
+  { from: "error.message", to: "message" },
+  { from: "error.type", to: "type" },
+  { from: "error.code", to: "code", nullAsUndefined: true },
+  { from: "error.param", to: "param", nullAsUndefined: true },
+  { from: "error.provider", to: "provider", nullAsUndefined: true },
+  { from: "error.model", to: "model", nullAsUndefined: true },
+  { from: "error.provider_status", to: "providerStatus", nullAsUndefined: true },
+  { from: "error.retryable", to: "retryable" },
+  { from: "error.request_id", to: "requestId", nullAsUndefined: true },
+];
+/** What a key's own 429 sends besides its body: the limit, what is left, whose, its period, and Retry-After. */
+const LIMIT_HEADERS = (limit: string, scope: string, period: string, retryAfter: string) => ({
+  "retry-after": retryAfter,
+  "x-curvet-limit": limit,
+  "x-curvet-limit-remaining": "0",
+  "x-curvet-limit-scope": scope,
+  "x-curvet-limit-period": period,
+});
+/** The finished media reply's `mediaUrl` (the same URL as its own key); a null one reads as undefined. */
+const MEDIA_URL: Rule = { from: "mediaUrl", to: "mediaUrl", nullAsUndefined: true };
 const NODES_EXECUTED: Rule = {
   from: "nodesExecuted",
   to: "nodesExecuted",
@@ -175,8 +198,10 @@ const replyCases: ReplyCase[] = [
         billing: "metered",
         remainingBalance: 12.5,
         remainingPoints: 40,
+        remainingCredits: 1290,
       },
-      metadata: { model: "gpt-4o-mini", latencyMs: 812, requestId: JOB_ID },
+      // Asked with allowFallbacks; another model answered.
+      metadata: { model: "claude-sonnet-4-6", servedModel: "gpt-4o", latencyMs: 812, requestId: JOB_ID },
     },
     run: (c) => c.chat.create(CHAT),
     type: "ChatReply",
@@ -197,7 +222,7 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: true,
       imageUrl: "https://cdn.curvet.ai/images/6741a1b2.png",
-      usage: { cost: 0.01, credits: 1, remainingBalance: 12.49, remainingPoints: 40 },
+      usage: { cost: 0.01, credits: 1, remainingBalance: 12.49, remainingPoints: 40, remainingCredits: null },
       metadata: { model: "flux-2-klein-4b", latencyMs: 4120, requestId: JOB_ID },
     },
     run: (c) => c.image.generate({ model: "flux-2-klein-4b", prompt: "a red cube" }),
@@ -211,14 +236,16 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: true,
       videoUrl: "https://cdn.curvet.ai/video/6741a1b2.mp4",
+      mediaUrl: "https://cdn.curvet.ai/video/6741a1b2.mp4",
       metadata: { model: "wan-2.2", jobId: JOB_ID, latencyMs: 24210 },
-      usage: { cost: 0.09, credits: 9, remainingBalance: 12.31 },
+      usage: { cost: 0.09, credits: 9, remainingBalance: 12.31, remainingCredits: 1231 },
       outputMetadata: { duration: 5, resolution: "720p", format: "mp4" },
     },
     run: (c) => c.video.submit(MEDIA),
     type: "MediaSubmitReply",
     rules: [
       SUCCESS,
+      MEDIA_URL,
       { from: "videoUrl", to: "mediaUrl", nullAsUndefined: true },
       {
         from: "metadata",
@@ -235,14 +262,16 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: true,
       audioUrl: "https://cdn.curvet.ai/audio/6741a1b2.mp3",
+      mediaUrl: "https://cdn.curvet.ai/audio/6741a1b2.mp3",
       metadata: { model: "ali-qwen3-tts-flash", jobId: JOB_ID, latencyMs: 9120 },
-      usage: { cost: 0.03, credits: 3, parts: 3, remainingBalance: 12.28 },
+      usage: { cost: 0.03, credits: 3, parts: 3, remainingBalance: 12.28, remainingCredits: 1228 },
       outputMetadata: { format: "mp3", durationSec: 41.2 },
     },
     run: (c) => c.audio.submit({ model: "ali-qwen3-tts-flash", prompt: "Hello there" }),
     type: "MediaSubmitReply",
     rules: [
       SUCCESS,
+      MEDIA_URL,
       { from: "audioUrl", to: "mediaUrl", nullAsUndefined: true },
       { from: "metadata", to: "metadata", open: true, reason: "see video 200" },
     ],
@@ -254,14 +283,16 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: true,
       modelUrl: "https://cdn.curvet.ai/3d/6741a1b2.glb",
+      mediaUrl: "https://cdn.curvet.ai/3d/6741a1b2.glb",
       metadata: { model: "meshy-3d", jobId: JOB_ID, latencyMs: 27400 },
-      usage: { cost: 0.2, credits: 20, remainingBalance: 12.08 },
+      usage: { cost: 0.2, credits: 20, remainingBalance: 12.08, remainingCredits: 1208 },
       outputMetadata: { format: "glb", polycount: 30000 },
     },
     run: (c) => c.threeD.submit({ model: "meshy-3d", prompt: "a ceramic mug" }),
     type: "MediaSubmitReply",
     rules: [
       SUCCESS,
+      MEDIA_URL,
       { from: "modelUrl", to: "mediaUrl", nullAsUndefined: true },
       { from: "metadata", to: "metadata", open: true, reason: "see video 200" },
     ],
@@ -273,13 +304,15 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: true,
       modelUrl: null,
+      mediaUrl: null,
       metadata: { model: "meshy-3d", jobId: JOB_ID, latencyMs: 28900 },
-      usage: { cost: 0.2, credits: 20, remainingBalance: 12.08 },
+      usage: { cost: 0.2, credits: 20, remainingBalance: 12.08, remainingCredits: 1208 },
     },
     run: (c) => c.threeD.submit({ model: "meshy-3d", prompt: "a ceramic mug" }),
     type: "MediaSubmitReply",
     rules: [
       SUCCESS,
+      MEDIA_URL,
       { from: "modelUrl", to: "mediaUrl", nullAsUndefined: true },
       { from: "metadata", to: "metadata", open: true, reason: "see video 200" },
     ],
@@ -477,7 +510,7 @@ const replyCases: ReplyCase[] = [
           maxInputTokens: 8191,
         },
       ],
-      rateLimits: { requestsPerHour: 100, costCapPerDay: 10 },
+      rateLimits: { enabled: true, requestsPerHour: 100, costCapPerDay: 10 },
     },
     run: async (c) => ({
       models: await c.models.list({ include: "all" }),
@@ -795,8 +828,13 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: false,
       error: "Rate limit exceeded. Maximum 100 requests per hour.",
+      code: "rate_limit_exceeded",
+      type: "rate_limit_error",
+      retryable: true,
+      requestId: "cvreq_01HZA",
       rateLimitInfo: { limit: 100, used: 101, resetsAt: "2026-11-13T11:00:00.000Z" },
     },
+    headers: LIMIT_HEADERS("100", "key", "hour", "1800"),
     run: (c) => thrown(c.chat.create(CHAT)),
     type: "RateLimitError",
     rules: [
@@ -815,8 +853,13 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: false,
       error: "Daily cost cap exceeded. Maximum $10 per day.",
+      code: "daily_cost_cap_exceeded",
+      type: "rate_limit_error",
+      retryable: true,
+      requestId: "cvreq_01HZB",
       costCapInfo: { limit: 10, used: "10.0000", resetsAt: "2026-11-14T00:00:00.000Z" },
     },
+    headers: LIMIT_HEADERS("10", "platform", "day", "50400"),
     run: (c) => thrown(c.chat.create(CHAT)),
     type: "RateLimitError",
     rules: [
@@ -835,8 +878,13 @@ const replyCases: ReplyCase[] = [
     sample: {
       success: false,
       error: "This key's monthly budget is used up.",
+      code: "budget_exhausted",
+      type: "rate_limit_error",
+      retryable: true,
+      requestId: "cvreq_01HZC",
       budgetInfo: { scope: "key", period: "month", limit: 5000, used: 5000, resetsAt: "2026-12-01T00:00:00.000Z" },
     },
+    headers: LIMIT_HEADERS("5000", "key", "month", "1512000"),
     run: (c) => thrown(c.chat.create(CHAT)),
     type: "RateLimitError",
     rules: [
@@ -848,6 +896,31 @@ const replyCases: ReplyCase[] = [
       { from: "budgetInfo.limit", to: "limit" },
       { from: "budgetInfo.used", to: "used" },
       { from: "budgetInfo.resetsAt", to: "resetsAt", same: sameDate },
+    ],
+  },
+  {
+    name: "error: the server's per-IP limit",
+    route: ["get", "/playground/balance", "429"],
+    schema: "PlaygroundErrorResponse",
+    sample: {
+      success: false,
+      error: "Too many requests from this IP, please try again later.",
+      code: "ip_rate_limited",
+      type: "rate_limit_error",
+      retryable: true,
+      requestId: "cvreq_01HZD",
+      message: "Too many requests from this IP, please try again later.",
+      retryAfter: 42,
+    },
+    headers: { "x-curvet-request-id": "cvreq_01HZD" },
+    run: (c) => thrown(c.balance.get()),
+    type: "RateLimitError",
+    rules: [
+      ERROR_SUCCESS,
+      ERROR_TEXT,
+      { from: "message", to: null, reason: "the text the server always carried beside `error`; in `err.raw`" },
+      // No Retry-After header in this sample, so the body's own value is what the SDK reads.
+      { from: "retryAfter", to: "retryAfterMs", same: (sent, got) => got === Number(sent) * 1000 },
     ],
   },
   {
@@ -868,14 +941,49 @@ const replyCases: ReplyCase[] = [
   {
     name: "error: a body over the server's size limit",
     route: ["post", "/playground/chat", "413"],
-    schema: "ServerErrorResponse",
-    sample: { error: "Something went wrong!", message: "Internal server error" },
+    schema: "PlaygroundErrorResponse",
+    sample: {
+      success: false,
+      error: "Something went wrong!",
+      code: "body_too_large",
+      type: "invalid_request_error",
+      retryable: false,
+      message: "Internal server error",
+    },
     run: (c) => thrown(c.chat.create(CHAT)),
     type: "CurvetError",
     rules: [
+      ERROR_SUCCESS,
       ERROR_TEXT,
-      { from: "message", to: null, reason: "always \"Internal server error\" outside development; in `err.raw`" },
+      { from: "message", to: null, reason: "the text the server always carried beside `error`; in `err.raw`" },
     ],
+  },
+  {
+    name: "error: a synchronous workflow run stopped on a step",
+    route: ["post", "/playground/workflows/{id}/run", "402"],
+    schema: "PlaygroundErrorResponse",
+    sample: {
+      success: false,
+      error: "Not enough credits to run this step. Top up and try again.",
+      code: "insufficient_credits",
+      type: "insufficient_quota",
+      retryable: false,
+      stepError: {
+        v: 1,
+        code: "insufficient_credits",
+        title: "Not enough credits",
+        scope: "wallet",
+        retryable: false,
+        actions: ["top_up"],
+        message: "Not enough credits to run this step. Top up and try again.",
+        model: "wan-2.2",
+      },
+      requestId: "cvreq_01HZE",
+      runId: RUN_ID,
+    },
+    run: (c) => thrown(c.workflows.run("wf_1", { inputs: {} })),
+    type: "CurvetError",
+    rules: [ERROR_SUCCESS, ERROR_TEXT],
   },
   {
     // The SDK calls no OpenAI-style route, but its error mapping reads that
@@ -899,17 +1007,47 @@ const replyCases: ReplyCase[] = [
     },
     run: (c) => thrown(c.chat.create(CHAT)),
     type: "CurvetError",
+    rules: OPENAI_ERROR,
+  },
+  {
+    name: "error: the OpenAI-style envelope, a key's budget",
+    route: ["post", "/chat/completions", "429"],
+    schema: "OpenAIErrorResponse",
+    sample: {
+      error: {
+        message: "This key's monthly budget is used up.",
+        type: "rate_limit_error",
+        code: "budget_exhausted",
+        param: null,
+        retryable: true,
+        request_id: "cvreq_01HZZ",
+        limit: {
+          kind: "budget",
+          limit: 5000,
+          used: 5000,
+          resets_at: "2026-12-01T00:00:00.000Z",
+          scope: "key",
+          period: "month",
+        },
+      },
+    },
+    headers: LIMIT_HEADERS("5000", "key", "month", "1512000"),
+    run: (c) => thrown(c.chat.create(CHAT)),
+    type: "RateLimitError",
     rules: [
-      { from: "error", to: null, reason: "the envelope; its fields are mapped below" },
-      { from: "error.message", to: "message" },
-      { from: "error.type", to: "type" },
-      { from: "error.code", to: "code", nullAsUndefined: true },
-      { from: "error.param", to: null, reason: "always null" },
-      { from: "error.provider", to: "provider", nullAsUndefined: true },
-      { from: "error.model", to: "model", nullAsUndefined: true },
-      { from: "error.provider_status", to: "providerStatus", nullAsUndefined: true },
-      { from: "error.retryable", to: "retryable" },
-      { from: "error.request_id", to: "requestId", nullAsUndefined: true },
+      ...OPENAI_ERROR,
+      { from: "error.limit", to: null, reason: "flattened into kind / limit / used / resetsAt / scope / period" },
+      {
+        from: "error.limit.kind",
+        to: "kind",
+        same: (sent, got) =>
+          got === ({ requests_per_hour: "rate", cost_per_day: "cost", budget: "budget" } as Record<string, string>)[String(sent)],
+      },
+      { from: "error.limit.limit", to: "limit" },
+      { from: "error.limit.used", to: "used", same: sameNumber },
+      { from: "error.limit.resets_at", to: "resetsAt", same: sameDate },
+      { from: "error.limit.scope", to: "scope" },
+      { from: "error.limit.period", to: "period" },
     ],
   },
   // ---- type only: no SDK method reads it --------------------------------------
@@ -966,7 +1104,7 @@ const requestCases: Array<{ schema: string; type: string; rules?: Rule[] }> = [
   {
     schema: "PlaygroundChatRequest",
     type: "ChatCreateParams",
-    rules: ["max_tokens", "response_format", "top_p", "frequency_penalty", "presence_penalty"].map((f) => ({
+    rules: ["max_tokens", "response_format", "top_p", "frequency_penalty", "presence_penalty", "reasoning_effort"].map((f) => ({
       from: f,
       to: null,
       reason: "OpenAI's snake_case spelling; the SDK sends the camelCase field",
@@ -980,6 +1118,27 @@ const requestCases: Array<{ schema: string; type: string; rules?: Rule[] }> = [
     schema: "PlaygroundWorkflowRunRequest",
     type: "WorkflowRunParams",
     rules: [{ from: "async", to: null, reason: "set by workflows.submit() / runAndPoll(), not a param" }],
+  },
+];
+
+/**
+ * Value lists the server documents, and the SDK union type that must name every
+ * value — and still accept any other string, so a value added later compiles.
+ */
+const enumCases: Array<{ name: string; component?: string; values: () => unknown[]; type: string }> = [
+  { name: "ApiErrorCode", component: "ApiErrorCode", values: () => component("ApiErrorCode").enum, type: "ApiErrorCode" },
+  { name: "StepError.code", values: () => component("StepError").properties.code.enum, type: "StepErrorCode" },
+  {
+    name: "PlaygroundErrorResponse.type",
+    values: () => component("PlaygroundErrorResponse").properties.type.enum,
+    type: "CurvetErrorType",
+  },
+  { name: "OpenAIErrorObject.type", values: () => component("OpenAIErrorObject").properties.type.enum, type: "CurvetErrorType" },
+  {
+    name: "ChatReasoningEffort",
+    component: "ChatReasoningEffort",
+    values: () => v.branches(component("ChatReasoningEffort")).flatMap((b) => b.enum ?? []),
+    type: "ChatReasoningEffort",
   },
 ];
 
@@ -1207,11 +1366,33 @@ describe("the SDK against the server's openapi.json", () => {
     });
   });
 
+  describe("value lists: the SDK's unions name every documented value, and stay open", () => {
+    for (const e of enumCases) {
+      it(`${e.name} → ${e.type}`, () => {
+        const values = e.values().filter((x): x is string => typeof x === "string");
+        expect(values.length).toBeGreaterThan(0);
+        const named = types.literals(e.type);
+        expect(values.filter((x) => !named.includes(x)), `add these to ${e.type}`).toEqual([]);
+        expect(types.acceptsAnyString(e.type), `${e.type} must also accept any string`).toBe(true);
+      });
+    }
+
+    it("would catch a missing value or a closed union", () => {
+      expect(types.literals("ApiErrorCode")).not.toContain("definitely_not_a_code");
+      expect(types.acceptsAnyString("JobStatus")).toBe(false);
+    });
+  });
+
   describe("nothing in the file goes unchecked", () => {
     it("every schema is checked here or listed as not used by this SDK", () => {
       const all = Object.keys(spec.components.schemas);
       const checked = new Set<string>();
-      for (const name of [...replyCases.map((c) => c.schema), ...requestCases.map((r) => r.schema)]) {
+      const named = [
+        ...replyCases.map((c) => c.schema),
+        ...requestCases.map((r) => r.schema),
+        ...enumCases.flatMap((e) => (e.component ? [e.component] : [])),
+      ];
+      for (const name of named) {
         checked.add(name);
         referenced(component(name), checked);
       }

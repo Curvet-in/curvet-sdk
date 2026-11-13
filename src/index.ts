@@ -154,4 +154,13 @@ export type {
   KnownModelId,
   ModelId,
 } from "./types/models";
-export type { StepError, StepErrorCode, StepErrorScope, StepErrorAction } from "./types/errors";
+export type {
+  StepError,
+  StepErrorCode,
+  StepErrorScope,
+  StepErrorAction,
+  ApiErrorCode,
+  IdempotencyErrorCode,
+  CurvetErrorCode,
+  CurvetErrorType,
+} from "./types/errors";

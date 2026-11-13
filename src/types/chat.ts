@@ -132,11 +132,15 @@ export interface ChatResponse {
   /**
    * The answer's text.
    *
-   * **Can be null at runtime** — the server sends null when the model answered
-   * with no text (see `finishReason`, e.g. `"tool_calls"`, or a provider that
-   * returned an empty answer). The type stays `string` in this release so that
-   * existing code such as `res.response.trim()` keeps compiling; guard with
-   * `res.response ?? ""` where it matters.
+   * Empty only when the request explains it: `finishReason` `"length"` (cut
+   * at `maxTokens` before any text — a reasoning model can spend a small
+   * `maxTokens` thinking) or `"stop"` on a request that sent stop sequences.
+   * Such a reply is charged. Any other empty answer is a `502` with
+   * `code: "no_output"`, not charged.
+   *
+   * The server's schema still allows null here, so guard with
+   * `res.response ?? ""` where it matters; the type stays `string` so that
+   * existing code such as `res.response.trim()` keeps compiling.
    */
   response: string;
   /**
@@ -148,9 +152,11 @@ export interface ChatResponse {
   metadata: {
     /**
      * The model asked for, after alias, retired-id and `"auto"` resolution.
-     * With `allowFallbacks` the model that answered may differ.
+     * With `allowFallbacks` the model that answered may differ: see `servedModel`.
      */
     model: string;
+    /** With `allowFallbacks`: the model that answered, present only when it is not `model`. */
+    servedModel?: string;
     latencyMs: number;
     /**
      * The charge's id (the metered job's id under metered billing). The server

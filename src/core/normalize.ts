@@ -3,14 +3,18 @@ import type { MediaJob, JobStatus } from "../types/job";
 type Obj = Record<string, any>;
 const asObj = (v: unknown): Obj => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {});
 
-/** The key a finished POST /video, /audio or /3d puts its output URL under. */
-const POST_URL_KEYS = ["videoUrl", "audioUrl", "modelUrl"] as const;
+/**
+ * The keys a finished POST /video, /audio or /3d puts its output URL under:
+ * its own (`videoUrl` / `audioUrl` / `modelUrl`) and, on current servers, the
+ * same URL as `mediaUrl`.
+ */
+const POST_URL_KEYS = ["mediaUrl", "videoUrl", "audioUrl", "modelUrl"] as const;
 
 /**
- * The API returns the output URL under three different keys depending on the
- * endpoint: `videoUrl` (/video), `audioUrl` (/audio), `modelUrl` (/3d), and
- * `output.mediaUrl` (GET /jobs/:id). Unify them. A null URL (a job that
- * finished without one) reads as undefined.
+ * The API returns the output URL under several keys depending on the endpoint:
+ * `mediaUrl` (current servers, on /video, /audio and /3d), `videoUrl` (/video),
+ * `audioUrl` (/audio), `modelUrl` (/3d), and `output.mediaUrl` (GET /jobs/:id).
+ * Unify them. A null URL (a job that finished without one) reads as undefined.
  */
 function pickMediaUrl(body: Obj): string | undefined {
   return (

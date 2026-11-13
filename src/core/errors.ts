@@ -1,13 +1,13 @@
-import type { StepError } from "../types/errors";
+import type { CurvetErrorCode, CurvetErrorType, StepError } from "../types/errors";
 
 export interface CurvetErrorOptions {
   status?: number;
   requestId?: string;
   raw?: unknown;
   /** See {@link CurvetError.code}. */
-  code?: string;
+  code?: CurvetErrorCode;
   /** See {@link CurvetError.type}. */
-  type?: string;
+  type?: CurvetErrorType;
   /** See {@link CurvetError.retryable}. */
   retryable?: boolean;
   provider?: string;
@@ -15,6 +15,8 @@ export interface CurvetErrorOptions {
   providerStatus?: number;
   stepError?: StepError;
   jobId?: string;
+  runId?: string;
+  param?: string;
   retryAfterMs?: number;
 }
 
@@ -29,19 +31,22 @@ export class CurvetError extends Error {
   /** The error body exactly as the server sent it. */
   readonly raw?: unknown;
   /**
-   * The server's machine-readable reason, when it sends one: a StepError code
-   * (`"provider_busy"`, `"content_policy"`, …), an `idempotency_key_*` code,
-   * `"upload_too_large"`, `"account_suspended"`, `"PROMPT_TOO_LONG"`, or a
-   * custom model's state on a 409. Absent on most validation, auth and
-   * guardrail refusals.
+   * The server's stable machine-readable reason: an {@link ApiErrorCode} for
+   * auth, policy, limit, lookup and server refusals (`"invalid_api_key"`,
+   * `"rate_limit_exceeded"`, `"route_not_found"`, …), a StepError code for a
+   * model or provider failure (`"provider_busy"`, `"content_policy"`, …), an
+   * `idempotency_key_*` code, `"upload_too_large"`, `"PROMPT_TOO_LONG"`, or a
+   * custom model's state on a 409. Current servers send one on every refusal
+   * except some of the chat, image and media routes' own request checks (some
+   * 400s, and the 402 with `required`).
    */
-  readonly code?: string;
+  readonly code?: CurvetErrorCode;
   /**
-   * OpenAI's error type for the code (`"invalid_request_error"`,
-   * `"rate_limit_error"`, `"insufficient_quota"`, `"api_error"`, and on the
-   * OpenAI-style routes `"authentication_error"`), when the server sends one.
+   * OpenAI's error type for the code: `"invalid_request_error"`,
+   * `"authentication_error"`, `"permission_error"`, `"rate_limit_error"`,
+   * `"insufficient_quota"` or `"api_error"`.
    */
-  readonly type?: string;
+  readonly type?: CurvetErrorType;
   /**
    * Whether the server says a retry can succeed. When it says so, the SDK's
    * automatic retries follow it; when it is absent, the SDK retries 429 and 5xx.
@@ -57,6 +62,10 @@ export class CurvetError extends Error {
   readonly stepError?: StepError;
   /** The id of the media job that failed, when the error is about one. */
   readonly jobId?: string;
+  /** The id of the workflow run that failed, when it was created before it failed (`workflows.run`). */
+  readonly runId?: string;
+  /** The request field the refusal is about (`model`, `input`, …), when the server names one. */
+  readonly param?: string;
   /**
    * How long the server asks the caller to wait before trying again, in ms
    * (`Retry-After`, the StepError's `retryAfterSec`, or a limit's reset time).
@@ -86,6 +95,8 @@ export class CurvetError extends Error {
     if (opts.providerStatus !== undefined) this.providerStatus = opts.providerStatus;
     if (opts.stepError !== undefined) this.stepError = opts.stepError;
     if (opts.jobId !== undefined) this.jobId = opts.jobId;
+    if (opts.runId !== undefined) this.runId = opts.runId;
+    if (opts.param !== undefined) this.param = opts.param;
     if (opts.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
     // Restore prototype chain so `instanceof` works after transpilation.
     Object.setPrototypeOf(this, new.target.prototype);
@@ -98,7 +109,10 @@ export class AuthError extends CurvetError {}
 export class PermissionError extends CurvetError {}
 /** 400 — invalid/unknown model or malformed payload. */
 export class BadRequestError extends CurvetError {}
-/** 404 — job or workflow not found, or a model that is not available (`code: "model_unavailable"`). */
+/**
+ * 404 — job or workflow not found (also for a malformed id), a path the server
+ * does not serve, or a model that is not available (`code: "model_unavailable"`).
+ */
 export class NotFoundError extends CurvetError {}
 /**
  * 5xx — upstream/server error — and any other status without a class of its
@@ -137,8 +151,11 @@ export class InsufficientBalanceError extends CurvetError {
 
 /**
  * 429 — the key's hourly request limit (`kind: "rate"`), its daily cost cap
- * (`"cost"`), a key, organisation or platform credit budget (`"budget"`), or a
- * busy provider (`kind: "rate"`, `code: "provider_busy"`).
+ * (`"cost"`), a key, organisation or platform credit budget (`"budget"`), the
+ * server's per-IP limit (`kind: "rate"`, `code: "ip_rate_limited"`), or a busy
+ * provider (`kind: "rate"`, `code: "provider_busy"`). Read from either error
+ * envelope (the playground's `rateLimitInfo` / `costCapInfo` / `budgetInfo`, or
+ * the OpenAI-style `error.limit`).
  */
 export class RateLimitError extends CurvetError {
   kind?: "rate" | "cost" | "budget";
@@ -233,9 +250,9 @@ export function stepErrorFields(stepError: unknown): CurvetErrorOptions {
  *
  * Reads both envelopes the server answers in: the playground's
  * `{ success: false, error: "<sentence>", code, type, retryable, stepError,
- * requestId, jobId, … }` and the OpenAI-style routes'
- * `{ error: { message, type, code, provider, model, provider_status,
- * retryable, request_id } }`.
+ * requestId, jobId, runId, … }` and the OpenAI-style routes'
+ * `{ error: { message, type, code, param, provider, model, provider_status,
+ * retryable, request_id, limit } }`.
  */
 export function errorFromResponse(
   status: number,
@@ -252,6 +269,8 @@ export function errorFromResponse(
       : typeof oa?.message === "string"
         ? oa.message
         : `HTTP ${status}`;
+  // `retryAfter` (seconds) is in the body of the server's own per-IP refusal.
+  const bodyWait = num(b.retryAfter);
   const base: CurvetErrorOptions = {
     status,
     requestId: requestId ?? str(b.requestId) ?? str(oa?.request_id),
@@ -264,7 +283,10 @@ export function errorFromResponse(
     providerStatus: num(oa?.provider_status) ?? se.providerStatus,
     stepError: se.stepError,
     jobId: str(b.jobId),
-    retryAfterMs: retryAfterHeaderMs(headers) ?? se.retryAfterMs,
+    runId: str(b.runId),
+    param: str(oa?.param),
+    retryAfterMs:
+      retryAfterHeaderMs(headers) ?? se.retryAfterMs ?? (bodyWait !== undefined ? bodyWait * 1000 : undefined),
   };
 
   switch (status) {
@@ -295,24 +317,37 @@ export function errorFromResponse(
       return new FailedDependencyError(message, base);
     case 429: {
       const e = new RateLimitError(message, base);
-      const budget = isObj(b.budgetInfo) ? b.budgetInfo : undefined;
+      // The playground names the limit by which object it sends; the
+      // OpenAI-style envelope sends one `limit` object with a `kind`.
+      const oaLimit: Obj | undefined = isObj(oa?.limit) ? oa.limit : undefined;
       const info: Obj | undefined = isObj(b.rateLimitInfo)
         ? b.rateLimitInfo
         : isObj(b.costCapInfo)
           ? b.costCapInfo
-          : budget;
-      e.kind = b.costCapInfo ? "cost" : !b.rateLimitInfo && budget ? "budget" : "rate";
+          : isObj(b.budgetInfo)
+            ? b.budgetInfo
+            : oaLimit;
+      const isCost =
+        (!isObj(b.rateLimitInfo) && isObj(b.costCapInfo)) ||
+        oaLimit?.kind === "cost_per_day" ||
+        base.code === "daily_cost_cap_exceeded";
+      const isBudget =
+        (!isObj(b.rateLimitInfo) && !isObj(b.costCapInfo) && isObj(b.budgetInfo)) ||
+        oaLimit?.kind === "budget" ||
+        base.code === "budget_exhausted";
+      e.kind = isCost ? "cost" : isBudget ? "budget" : "rate";
       if (info) {
         e.limit = num(info.limit);
         // The cost cap sends `used` as a string with four decimals ("10.0000").
         e.used = num(info.used);
-        if (info.resetsAt) {
-          const at = new Date(info.resetsAt);
+        const reset = info.resetsAt ?? info.resets_at;
+        if (reset) {
+          const at = new Date(reset);
           if (!Number.isNaN(at.getTime())) e.resetsAt = at;
         }
-        if (info === budget) {
-          e.scope = str(budget.scope);
-          e.period = str(budget.period);
+        if (e.kind === "budget") {
+          e.scope = str(info.scope);
+          e.period = str(info.period);
         }
       }
       // `resetsIn` (seconds) is what older servers sent; Retry-After and the

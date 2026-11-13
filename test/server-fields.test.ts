@@ -10,7 +10,10 @@ import {
   FailedDependencyError,
   RateLimitError,
   JobFailedError,
+  InsufficientBalanceError,
   type ChatCreateParams,
+  type ApiErrorCode,
+  type CurvetErrorCode,
 } from "../src";
 import { mockFetch, type MockReply } from "./helpers";
 
@@ -396,5 +399,90 @@ describe("analytics, workflows, image", () => {
     expect(body.messages[1].content[1].image_url.url).toBe("https://cdn/p.png");
     expect(res.finishReason).toBe("stop");
     expect(res.usage.totalTokens).toBe(4);
+  });
+});
+
+describe("what current servers add", () => {
+  it("a 429 without limit details (a busy provider) is kind 'rate'", async () => {
+    const fetch = mockFetch(() => stepErrorReply(429, "provider_busy", true));
+    const err = await new Curvet({ appKey: "k", fetch, maxRetries: 0 }).chat.create(CHAT).catch((e) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.kind).toBe("rate");
+    expect(err.limit).toBeUndefined();
+  });
+
+  it("a key's limit names its kind by code when the details are missing", async () => {
+    const fetch = mockFetch(() => ({
+      status: 429,
+      body: { success: false, error: "Budget used up", code: "budget_exhausted", type: "rate_limit_error", retryable: true },
+      headers: { "retry-after": "5" },
+    }));
+    const err = await new Curvet({ appKey: "k", fetch, maxRetries: 0 }).chat.create(CHAT).catch((e) => e);
+    expect(err.kind).toBe("budget");
+    expect(err.retryAfterMs).toBe(5000);
+  });
+
+  it("the OpenAI-style envelope's `param` and `limit` reach the error", async () => {
+    const bad = mockFetch(() => ({
+      status: 400,
+      body: { error: { message: "dimensions is too large", type: "invalid_request_error", code: "bad_request", param: "dimensions" } },
+    }));
+    const e1 = await new Curvet({ appKey: "k", fetch: bad }).chat.create(CHAT).catch((e) => e);
+    expect(e1.param).toBe("dimensions");
+    expect(e1.code).toBe("bad_request");
+
+    const capped = mockFetch(() => ({
+      status: 429,
+      body: {
+        error: {
+          message: "Daily cost cap exceeded.",
+          type: "rate_limit_error",
+          code: "daily_cost_cap_exceeded",
+          param: null,
+          retryable: true,
+          request_id: "cvreq_9",
+          limit: { kind: "cost_per_day", limit: 10, used: "10.0000", resets_at: "2030-01-01T00:00:00Z" },
+        },
+      },
+    }));
+    const e2 = await new Curvet({ appKey: "k", fetch: capped, maxRetries: 0 }).chat.create(CHAT).catch((e) => e);
+    expect(e2).toMatchObject({ kind: "cost", limit: 10, used: 10, requestId: "cvreq_9", retryable: true });
+    expect(e2.resetsAt).toBeInstanceOf(Date);
+    expect("param" in e2).toBe(false);
+  });
+
+  it("a synchronous workflow run that stopped on a step throws that step's error, with the runId", async () => {
+    const fetch = mockFetch(() => ({
+      status: 402,
+      body: {
+        success: false,
+        error: "Not enough credits",
+        code: "insufficient_credits",
+        type: "insufficient_quota",
+        retryable: false,
+        stepError: stepError("insufficient_credits", false),
+        runId: "run_7",
+      },
+    }));
+    const err = await new Curvet({ appKey: "k", fetch }).workflows.run("wf1").catch((e) => e);
+    expect(err).toBeInstanceOf(InsufficientBalanceError);
+    expect(err).toMatchObject({ code: "insufficient_credits", runId: "run_7", retryable: false });
+  });
+
+  it("a finished media reply that names only `mediaUrl` is completed", async () => {
+    const fetch = mockFetch(() => ({
+      status: 200,
+      body: { success: true, mediaUrl: "https://cdn/v.mp4", metadata: { model: "m", jobId: "j", latencyMs: 1 } },
+    }));
+    const res = await new Curvet({ appKey: "k", fetch }).video.submit({ model: "m", prompt: "x" });
+    expect(res.status).toBe("completed");
+    expect(res.mediaUrl).toBe("https://cdn/v.mp4");
+  });
+
+  it("the error-code types take the documented codes and any later one", () => {
+    const known: ApiErrorCode = "invalid_api_key";
+    const later: ApiErrorCode = "a_code_added_next_year";
+    const any: CurvetErrorCode[] = [known, later, "provider_busy", "idempotency_key_in_use", "PROMPT_TOO_LONG"];
+    expect(any).toHaveLength(5);
   });
 });

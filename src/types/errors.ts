@@ -28,6 +28,98 @@ export type StepErrorCode =
   | "unknown"
   | (string & {});
 
+/**
+ * The `code` of every `/api/v1` refusal that is not a model or provider
+ * failure (those carry a {@link StepErrorCode}). Stable: the sentence may
+ * change, the code does not. With its HTTP status:
+ *
+ * - the key and its account: `missing_api_key`, `invalid_api_key`,
+ *   `api_key_revoked`, `api_key_expired`, `app_key_not_accepted` (401);
+ *   `app_not_active`, `api_not_enabled`, `developer_account_not_found`,
+ *   `developer_not_approved`, `user_not_found`, `account_suspended` (403);
+ * - policy: `model_required` (400); `model_not_allowed`,
+ *   `model_blocked_by_policy`, `category_not_allowed`, `food_api_not_enabled`,
+ *   `per_call_limit_exceeded`, `ip_not_allowed`, `tool_not_allowed` (403);
+ *   `content_filtered` (422); `rate_limit_exceeded`, `daily_cost_cap_exceeded`,
+ *   `budget_exhausted` (429, retryable, with Retry-After);
+ * - lookups: `workflow_not_found`, `workflow_run_not_found`, `job_not_found`
+ *   (404); `workflow_access_denied`, `workflow_run_access_denied` (403);
+ * - the server itself: `route_not_found` (404), `invalid_json` (400),
+ *   `body_too_large` (413), `bad_request` (another 4xx), `ip_rate_limited`
+ *   (429, retryable, with Retry-After).
+ *
+ * Any other string is accepted, so a code added later does not break compilation.
+ */
+export type ApiErrorCode =
+  | "missing_api_key"
+  | "invalid_api_key"
+  | "api_key_revoked"
+  | "api_key_expired"
+  | "app_key_not_accepted"
+  | "app_not_active"
+  | "api_not_enabled"
+  | "developer_account_not_found"
+  | "developer_not_approved"
+  | "user_not_found"
+  | "account_suspended"
+  | "model_required"
+  | "model_not_allowed"
+  | "model_blocked_by_policy"
+  | "category_not_allowed"
+  | "food_api_not_enabled"
+  | "per_call_limit_exceeded"
+  | "ip_not_allowed"
+  | "tool_not_allowed"
+  | "content_filtered"
+  | "rate_limit_exceeded"
+  | "daily_cost_cap_exceeded"
+  | "budget_exhausted"
+  | "workflow_not_found"
+  | "workflow_access_denied"
+  | "workflow_run_not_found"
+  | "workflow_run_access_denied"
+  | "job_not_found"
+  | "route_not_found"
+  | "invalid_json"
+  | "body_too_large"
+  | "bad_request"
+  | "ip_rate_limited"
+  | (string & {});
+
+/** The `Idempotency-Key` refusals. */
+export type IdempotencyErrorCode =
+  | "idempotency_key_in_use"
+  | "idempotency_key_not_replayable"
+  | "idempotency_key_mismatch"
+  | "idempotency_key_invalid";
+
+/**
+ * Any `code` an error can carry: an {@link ApiErrorCode}, a
+ * {@link StepErrorCode}, an {@link IdempotencyErrorCode}, or one of the
+ * routes' own (`upload_too_large`, `PROMPT_TOO_LONG`, `model_not_found`,
+ * `insufficient_quota`, a custom model's state on a 409). Any other string is
+ * accepted.
+ */
+export type CurvetErrorCode =
+  | ApiErrorCode
+  | StepErrorCode
+  | IdempotencyErrorCode
+  | "upload_too_large"
+  | "PROMPT_TOO_LONG"
+  | "model_not_found"
+  | "insufficient_quota"
+  | (string & {});
+
+/** OpenAI's error type for a code. */
+export type CurvetErrorType =
+  | "invalid_request_error"
+  | "authentication_error"
+  | "permission_error"
+  | "rate_limit_error"
+  | "insufficient_quota"
+  | "api_error"
+  | (string & {});
+
 /** Whose problem a {@link StepError} is. */
 export type StepErrorScope =
   | "request"

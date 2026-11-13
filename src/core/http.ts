@@ -10,10 +10,11 @@ import { fullJitterBackoff, isIdempotencyInProgress, shouldRetry, sleep } from "
 const IDEMPOTENCY_HEADER = "idempotency-key";
 
 /**
- * How long a POST keeps asking with its key after a timeout or a 409
- * `idempotency_key_in_use`, by default: long enough for a slow image (60–90 s)
- * or a short job to finish on the server, short enough not to hang a caller
- * for many minutes.
+ * How long a POST keeps asking with its key after a 409
+ * `idempotency_key_in_use` (the first attempt is still running on the server),
+ * by default: long enough for a slow image (60–90 s) or a short job to finish,
+ * short enough not to hang a caller for many minutes. A timeout on the SDK's
+ * side does not start this wait; it is retried under `maxRetries`.
  */
 export const DEFAULT_IDEMPOTENCY_WAIT_MS = 120_000;
 
@@ -110,10 +111,12 @@ export class HttpClient {
     const { url, method, headers, payload, options, maxRetries, timeout, idempotencyKey } = a;
     const signalOf = options?.signal;
 
-    // After a timeout or a "still running" answer, a keyed POST keeps asking
-    // with the same key until this deadline instead of spending maxRetries:
-    // the server either answers the first attempt's result (a replay), says it
-    // is still running, or — when that attempt was refunded — runs it once more.
+    // After a "still running" answer (409 idempotency_key_in_use), a keyed POST
+    // keeps asking with the same key until this deadline instead of spending
+    // maxRetries: the server either answers the first attempt's result (a
+    // replay), says it is still running, or — when that attempt failed and was
+    // refunded — runs it once more. Only the 409 starts this wait; a timeout of
+    // our own is retried under maxRetries (below).
     const waitMs = options?.idempotencyWaitMs ?? this.opts.idempotencyWaitMs ?? DEFAULT_IDEMPOTENCY_WAIT_MS;
     let waitUntil: number | undefined;
     const mayKeepAsking = (): boolean => {
@@ -166,13 +169,14 @@ export class HttpClient {
         // AbortError: distinguish user-abort (rethrow) from our timeout (retry/ConnectionError).
         if (e?.name === "AbortError") {
           if (signalOf?.aborted) throw e;
-          // Our timeout. The call may still be running on the server: ask again
-          // with the same key until the deadline.
-          if (mayKeepAsking()) {
-            await sleep(untilDeadline(fullJitterBackoff(0)), signalOf);
-            continue;
-          }
-          if (waitUntil === undefined && attempt < maxRetries) {
+          // Our timeout: an ordinary retry, counted against maxRetries
+          // (maxRetries 0 = one send). It goes with the same key, so for image,
+          // media and workflow routes — where the server keeps working after we
+          // hang up — the retry gets 409 idempotency_key_in_use and the wait
+          // above takes over until the first attempt's result. Chat and
+          // embeddings refund and free the key when we hang up, so there a
+          // re-send is a fresh provider call; never loop on those.
+          if (attempt < maxRetries) {
             await this.backoff(undefined, attempt, signalOf);
             attempt++;
             continue;

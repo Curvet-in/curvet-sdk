@@ -67,8 +67,14 @@ console.log(res.finishReason, res.usage.promptTokens, res.usage.completionTokens
 `finishReason` says why the answer stopped (`"length"` when it was cut at the
 answer limit). Without `maxTokens`, a call billed per token gets the provider's
 own limit (`maxOutputTokens` on the model) and any other call the model's
-default. `res.response` can be null when the model answered with no text — guard
-with `res.response ?? ""` where it matters.
+default. An empty `res.response` is a real, charged answer only when the request
+explains it — `finishReason` `"length"` (the limit was reached before any text;
+a reasoning model can spend a small `maxTokens` thinking) or `"stop"` on a
+request with stop sequences; any other empty answer is a `502` error with
+`code: "no_output"`, not charged. Guard with `res.response ?? ""` where it
+matters. With `allowFallbacks`, `res.metadata.servedModel` names the model that
+answered when it was not the one asked for, and `res.usage.remainingCredits`
+(also on image and media) is what you can still spend.
 
 The request also takes `allowFallbacks`, `responseFormat` (JSON mode), `topP`,
 `stop`, `seed`, `frequencyPenalty`, `presencePenalty`, `reasoningEffort`, and
@@ -172,7 +178,9 @@ entry carries `capability`, `available`, `comingSoon`, `endpoint`, `surface`,
 Your own custom models carry `group: "mine"` and `baseModel`; embedding models
 carry `dims`, `supportsDimensions` and `maxInputTokens`. `pricing.billing` is
 `"metered"` when a call is billed on the token rates now, `"flat_per_request"`
-when the flat per-call credit still applies.
+when the flat per-call credit still applies. `models.rateLimits()` returns the
+key's hourly request limit and daily cost cap, and `enabled: false` when
+neither is enforced for it.
 
 `capability` matters most for audio, where `type: "audio"` covers both
 directions. A `"transcription"` model takes a file on `voice.stt()`; passing one
@@ -414,15 +422,19 @@ Every error carries what the server sent with it:
 
 | Field | What |
 |---|---|
-| `code` | the stable machine-readable reason, when there is one: a model/provider failure's code (`provider_busy`, `content_policy`, `model_retired`, …), an `idempotency_key_*` code, `upload_too_large`, … |
-| `type` | OpenAI's error type for it (`invalid_request_error`, `rate_limit_error`, `insufficient_quota`, `api_error`) |
-| `retryable` | whether the server says a retry can succeed |
+| `code` | the stable machine-readable reason. Current servers send one on every refusal (except some of the chat, image and media routes' own request checks): an `ApiErrorCode` for auth, policy, limits, lookups and the server itself (`invalid_api_key`, `model_not_allowed`, `rate_limit_exceeded`, `route_not_found`, …), a model/provider failure's code (`provider_busy`, `content_policy`, `no_output`, …), an `idempotency_key_*` code, `upload_too_large`, … The `ApiErrorCode` and `CurvetErrorCode` types list them, and accept any later code |
+| `type` | OpenAI's error type for it (`invalid_request_error`, `authentication_error`, `permission_error`, `rate_limit_error`, `insufficient_quota`, `api_error`) |
+| `retryable` | whether the server says the same request can succeed later |
 | `provider`, `model`, `providerStatus` | for a model or provider failure: who failed, and the provider's own HTTP status |
 | `stepError` | for a model or provider failure: the full structured error (`title`, `scope`, `actions`, `suggestedModels`, `refundedCredits`, …) |
 | `jobId` | the media job that failed (`JobFailedError` too) |
+| `runId` | the workflow run that failed (`workflows.run`, once the run was created) |
+| `param` | the request field the refusal is about, when the server names one |
 | `requestId` | the server's request id — quote it to support |
 | `retryAfterMs` | how long the server asks you to wait (`Retry-After`, or a limit's reset) |
 | `raw` | the error body exactly as sent |
+
+A synchronous `workflows.run()` that stops on a failing step throws that step's error with its own status — an `InsufficientBalanceError` (402, `code: "insufficient_credits"`), an `APIError` (502 `provider_down`), … — carrying `runId`. A malformed workflow or run id is a `NotFoundError`.
 
 ```ts
 try {
@@ -434,13 +446,16 @@ try {
 }
 ```
 
-Retries: when an error body says `retryable`, the SDK follows it — a `503 provider_unavailable` (our account at the provider) is not retried, a retryable answer is, waiting what `Retry-After` says (capped at 30 s). When the body does not say, `429` and `5xx` (and pre-response network errors) are retried with exponential backoff + jitter, respecting rate-limit resets, and other `4xx` are not — except a `409 idempotency_key_in_use` (below).
+Retries: when an error body says `retryable`, the SDK follows it — a `503 provider_unavailable` (our account at the provider) is not retried, a retryable answer is, waiting what `Retry-After` says (capped at 30 s). When the body does not say, `429` and `5xx` (and timeouts and pre-response network errors) are retried with exponential backoff + jitter, respecting rate-limit resets, and other `4xx` are not — except a `409 idempotency_key_in_use` (below).
 
 ### Idempotency
 
 Every POST carries an `Idempotency-Key` (a UUID generated per call), and every retry of that call re-sends the same key. The server remembers a finished call for 24 hours: a repeat with the same key gets the first reply (with `Idempotent-Replayed: true`) instead of a second run and a second charge.
 
-**A call slower than `timeout`.** When a POST times out, or the server answers `409 idempotency_key_in_use` (the first attempt is still running), the SDK keeps asking with the same key — honouring `Retry-After` — for up to `idempotencyWaitMs` (default 120000), instead of spending `maxRetries` on it. A 70-second image with the default 60-second timeout therefore returns its image, charged once. `idempotencyWaitMs: 0` turns the wait off; the caller's `signal` stops it at once.
+**A call slower than `timeout`.** A timeout on the SDK's side is retried like any other failure — at most `maxRetries` times (`maxRetries: 0` means one send) — with the same key. What the retry finds depends on the route:
+
+- **Image, media and workflow runs** keep working on the server after the SDK hangs up. The retry gets `409 idempotency_key_in_use` while the first attempt finishes, and the SDK keeps asking with the same key — honouring `Retry-After` — for up to `idempotencyWaitMs` (default 120000), then returns the first attempt's result, charged once. A 70-second image with the default 60-second timeout (and the default `maxRetries: 2`) therefore returns its image. `idempotencyWaitMs: 0` turns that wait off; the caller's `signal` stops it at once.
+- **Chat** (and embeddings) refund the call and free its key when the SDK hangs up, so a retry is a fresh call to the model, which can time out the same way. Give chat a `timeout` longer than the answers you expect rather than relying on retries.
 
 **The key is handed back.** Every error a POST throws carries `err.idempotencyKey`, and replies with a `metadata` block carry `metadata.idempotencyKey`. If you give up on a call, retry it with that key: you get its result if it completed, rather than paying for it again.
 
@@ -482,7 +497,7 @@ new Curvet({
   baseURL: "https://curvet.ai/api/v1/playground", // override for staging
   timeout: 60_000,            // per-request, ms
   maxRetries: 2,
-  idempotencyWaitMs: 120_000,  // after a POST times out, keep asking with its key this long
+  idempotencyWaitMs: 120_000,  // on 409 idempotency_key_in_use, keep asking with the key this long
   defaultPollIntervalMs: 2500, // async job polling
   defaultPollTimeoutMs: 180_000,
   fetch: customFetch,          // for Node < 18 / testing

@@ -169,7 +169,10 @@ export interface OpenAIModelList {
 }
 
 export interface RateLimits {
+  /** false: neither limit is enforced for this key (the numbers are what would apply). */
+  enabled?: boolean;
   requestsPerHour: number;
+  /** USD. */
   costCapPerDay: number;
 }
 

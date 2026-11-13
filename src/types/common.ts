@@ -4,6 +4,13 @@ export interface Usage {
   credits: number;
   remainingBalance?: number;
   remainingPoints?: number;
+  /**
+   * Credits the owner can still spend after this call: wallet, points and the
+   * enterprise or pool credits they may draw on — the same figure on chat,
+   * image and media (unlike `remainingBalance`). null when the balance could
+   * not be read.
+   */
+  remainingCredits?: number | null;
 }
 
 /** Per-request overrides accepted by every SDK method. */
@@ -27,9 +34,9 @@ export interface RequestOptions {
   idempotencyKey?: string;
   /**
    * For a POST: how long, in ms, to keep asking with the same key after a
-   * timeout or a `409 idempotency_key_in_use`, while the server finishes the
-   * call (default: the client's `idempotencyWaitMs`, 120000). 0 turns the wait
-   * off.
+   * `409 idempotency_key_in_use`, while the server finishes the call (default:
+   * the client's `idempotencyWaitMs`, 120000). 0 turns the wait off. A timeout
+   * on the SDK's side is retried under `maxRetries`, not this.
    */
   idempotencyWaitMs?: number;
 }

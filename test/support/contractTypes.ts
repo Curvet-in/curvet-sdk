@@ -42,4 +42,9 @@ export type {
   ThreeDGenerateParams,
   WorkflowRunParams,
   OpenAIModelList,
+  ApiErrorCode,
+  StepErrorCode,
+  CurvetErrorType,
+  ChatReasoningEffort,
+  JobStatus,
 } from "../../src";

@@ -195,9 +195,10 @@ const inUse = {
 };
 
 describe("waiting for a call the server is still running", () => {
-  it("a call slower than the timeout: keeps asking with the same key until the result arrives, maxRetries untouched", async () => {
-    // Attempt 1 times out (the image takes longer than `timeout`); the server is
-    // still running it for the next two asks, then answers its result.
+  it("a call slower than the timeout: one retry with the same key, then waits on 409 until the result arrives", async () => {
+    // Attempt 1 times out (the image takes longer than `timeout`); the timeout
+    // is retried once (maxRetries 1), the server is still running it for the
+    // next two asks (409, which the wait handles), then answers its result.
     let n = 0;
     const fetch = mockFetch(async (_url, init) => {
       n++;
@@ -205,7 +206,7 @@ describe("waiting for a call the server is still running", () => {
       if (n <= 3) return inUse;
       return chatOk;
     });
-    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 0, timeout: 20, idempotencyWaitMs: 5_000 });
+    const curvet = new Curvet({ appKey: "k", fetch, maxRetries: 1, timeout: 20, idempotencyWaitMs: 5_000 });
     const res = await curvet.chat.create(params);
     expect(res.response).toBe("pong");
     expect(fetch.calls).toHaveLength(4);

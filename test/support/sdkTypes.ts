@@ -14,6 +14,10 @@ export interface PropertyInfo {
 export interface SdkTypes {
   /** Look `path` ("[]" for an array's items) up on the exported type `typeName`. */
   property(typeName: string, path: string[]): PropertyInfo;
+  /** The string literals the exported union type `typeName` names (its `string & {}` catch-all is not one). */
+  literals(typeName: string): string[];
+  /** Whether the exported type also accepts any string (`string`, or the `string & {}` catch-all). */
+  acceptsAnyString(typeName: string): boolean;
 }
 
 /**
@@ -85,6 +89,17 @@ export function loadSdkTypes(entryFile: string): SdkTypes {
         nullable = admits(t, ts.TypeFlags.Null);
       }
       return { found: true, optional, nullable };
+    },
+    literals(typeName) {
+      const t = typeOf(typeName);
+      const parts = t.isUnion() ? t.types : [t];
+      return parts.filter((p): p is ts.StringLiteralType => p.isStringLiteral()).map((p) => p.value);
+    },
+    acceptsAnyString(typeName) {
+      const t = typeOf(typeName);
+      const parts = t.isUnion() ? t.types : [t];
+      const isString = (p: ts.Type) => !!(p.flags & ts.TypeFlags.String);
+      return parts.some((p) => isString(p) || (p.isIntersection() && p.types.some(isString)));
     },
   };
 }
